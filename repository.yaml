@@ -1,0 +1,5 @@
+---
+# https://developers.home-assistant.io/docs/add-ons/repository#repository-configuration
+name: Read Sinamics V20 Smart Access multi-pump status and publish to MQTT for Home Assistant.
+url: "https://github.com/peterVorman/hassio-addons"
+maintainer: Peter Vorman <peter.vorman@gmail.com>

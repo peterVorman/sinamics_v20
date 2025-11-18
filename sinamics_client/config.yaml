@@ -1,0 +1,47 @@
+---
+name: Sinamics V20 Pump Station
+version: dev
+slug: sinamics_v20
+description: Read Sinamics V20 Smart Access multi-pump status and publish to MQTT for Home Assistant.
+startup: services
+init: false
+arch:
+  - aarch64
+  - amd64
+options:
+  host: "192.168.1.1"
+  port: 80
+  mqtt_host: core-mosquitto
+  mqtt_port: 1883
+  mqtt_username: mqtt_user
+  mqtt_password: mqtt_pass
+  mqtt_topic: "sinamics_v20/pump_station/state"
+  poll_interval: 10
+  param_definitions:
+    - "r0052:r0052_status"
+    - "r4000:r4000_mpc"
+    - "r0020:dds_float"
+    - "r0021:dds_float"
+    - "r0032:dds_float"
+    - "r0035:dds_float"
+    - "r0039:dds_float"
+    - "r0072:dds_float"
+    - "P1080:dds_float"
+    - "P1082:dds_float"
+    - "r2260:dds_float"
+    - "r2294:dds_float"
+    - "r2273:dds_float"
+    - "P2390:dds_float"
+    - "r4026:dds_float"
+    - "r4027:dds_float"
+schema:
+  host: str
+  port: int
+  mqtt_host: str
+  mqtt_port: int
+  mqtt_username: "str?"
+  mqtt_password: "str?"
+  mqtt_topic: str
+  poll_interval: int
+  param_definitions:
+    - str
