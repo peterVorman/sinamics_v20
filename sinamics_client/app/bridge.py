@@ -189,19 +189,16 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
         mqtt_client.publish(discovery_topic, json.dumps(payload), retain=True)
         logger.info("Published discovery: %s", discovery_topic)
 
+def _normalize_param_items(items) -> dict:
+    """Normalize iterable of 'CODE[:PARSER]' strings into dict.
 
-def load_param_config_from_env() -> dict:
-    """Read param definitions from env or Home Assistant options.json."""
-    raw = os.getenv("PARAM_DEFS")
-    if raw is None or raw.strip() == "":
-        raw = "[]"
-        items = None
-        try:
-            items = json.loads(raw)
-        except Exception as exc:
-            logger.warning("Failed to parse PARAM_DEFS: %s", exc)
+    Args:
+        items: Iterable of strings. Each string is either 'CODE:PARSER' or 'CODE'.
 
-    param_config = {}
+    Returns:
+        Dict mapping 'CODE' to 'PARSER' (default 'raw' when not provided).
+    """
+    result = {}
     for item in items:
         if not isinstance(item, str):
             continue
@@ -212,9 +209,72 @@ def load_param_config_from_env() -> dict:
         code = code.strip()
         parser_name = parser_name.strip()
         if code:
-            param_config[code] = parser_name
+            result[code] = parser_name
+    return result
 
-    logger.info("Loaded param definitions: %s", param_config)
+
+def _parse_param_defs_string(raw: str) -> dict:
+    """Parse PARAM_DEFS from JSON or from newline/comma separated text.
+
+    Accepted formats:
+      - JSON array of strings: ["r0052:r0052_status", "r4000:r4000_mpc"]
+      - Plain text with one 'CODE:PARSER' per line (or comma-separated).
+      - Lines starting with '#' are ignored.
+
+    Args:
+        raw: Raw value from the PARAM_DEFS environment variable.
+
+    Returns:
+        Dict mapping code -> parser_name.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+
+    # Try JSON first if it looks like JSON content
+    if raw[0] in "[{":
+        try:
+            items = json.loads(raw)
+            if not isinstance(items, list):
+                logger.warning("PARAM_DEFS JSON is not a list, got: %r", type(items))
+                return {}
+            return _normalize_param_items(items)
+        except Exception as exc:
+            logger.warning("Failed to parse PARAM_DEFS as JSON: %s", exc)
+            # Fall through to plain-text parsing
+
+    # Fallback plain-text parsing: split by lines; if single line, allow commas
+    lines = raw.splitlines()
+    if len(lines) == 1:
+        lines = [part for part in raw.split(",")]
+
+    items = []
+    for line in lines:
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        items.append(s)
+
+    return _normalize_param_items(items)
+
+def load_param_config_from_env() -> dict:
+    """Read and parse PARAM_DEFS from environment only.
+
+    Supported formats:
+      - JSON array of strings
+      - Newline- or comma-separated 'CODE:PARSER' entries
+    """
+    raw = os.getenv("PARAM_DEFS", "")
+    if not raw.strip():
+        logger.info("PARAM_DEFS is empty; no parameters will be polled.")
+        return {}
+
+    param_config = _parse_param_defs_string(raw)
+    if not param_config:
+        logger.warning("PARAM_DEFS could not be parsed; no parameters will be polled.")
+        return {}
+
+    logger.info("Loaded param definitions: %s", list(param_config.keys()))
     return param_config
 
 
