@@ -26,7 +26,7 @@ PARSER_REGISTRY = {
 SENSOR_HINTS = {
     # Temperature-like parameters (Celsius)
     "r0032": {
-        "name": "Actual filtered power",
+        "name": "Actual power",
         "device_class": "power",
         "unit_of_measurement": "kW",
         "state_class": "measurement",
@@ -40,7 +40,7 @@ SENSOR_HINTS = {
         "icon": "mdi:thermometer",
     },
     "r0035": {
-        "name": "Actual motor temperature",
+        "name": "Motor temperature",
         "device_class": "temperature",
         "unit_of_measurement": "°C",
         "state_class": "measurement",
@@ -84,25 +84,25 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
         },
         "sinamics_pump_state": {
             "component": "sensor",
-            "name": "Pump Station State",
+            "name": "Station State",
             "value_template": "{{ value_json.high_level.state }}",
             "icon": "mdi:pump",
         },
         "sinamics_pump_fault": {
             "component": "binary_sensor",
-            "name": "Pump Station Fault",
+            "name": "Station Fault",
             "value_template": "{{ value_json.high_level.has_fault }}",
             "device_class": "problem",
         },
         "sinamics_pump_warning": {
             "component": "binary_sensor",
-            "name": "Pump Station Warning",
+            "name": "Station Warning",
             "value_template": "{{ value_json.high_level.has_warning }}",
             "icon": "mdi:alert",
         },
         "sinamics_pump_freq_actual": {
             "component": "sensor",
-            "name": "Actual Frequency",
+            "name": "Frequency Actual",
             "value_template": "{{ value_json.frequency.actual_filtered_hz }}",
             "unit_of_measurement": "Hz",
             "icon": "mdi:sine-wave",
@@ -125,13 +125,6 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
             "component": "sensor",
             "name": "Frequency max",
             "value_template": "{{ value_json.frequency.max_hz }}",
-            "unit_of_measurement": "Hz",
-            "icon": "mdi:sine-wave",
-        },
-        "sinamics_pump_freq_setpoint": {
-            "component": "sensor",
-            "name": "Pump Setpoint Frequency",
-            "value_template": "{{ value_json.frequency.setpoint_before_rfg_hz }}",
             "unit_of_measurement": "Hz",
             "icon": "mdi:sine-wave",
         },
