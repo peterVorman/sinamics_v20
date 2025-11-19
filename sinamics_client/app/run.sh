@@ -9,12 +9,7 @@ MQTT_USERNAME=$(bashio::config 'mqtt_username')
 MQTT_PASSWORD=$(bashio::config 'mqtt_password')
 MQTT_TOPIC=$(bashio::config 'mqtt_topic')
 POLL_INTERVAL=$(bashio::config 'poll_interval')
-PARAMS_RAW="$(bashio::config 'param_definitions')"
-if ! jq -e . >/dev/null 2>&1 <<<"${PARAMS_RAW}"; then
-  bashio::log.fatal "param_definitions is not valid JSON: ${PARAMS_RAW}"
-  exit 1
-fi
-PARAM_DEFS="$(jq -c . <<<"${PARAMS_RAW}")"
+PARAM_DEFS=$(bashio::config 'param_definitions')
 
 export PARAM_DEFS="$PARAM_DEFS"
 export SINAMICS_HOST="$HOST"
