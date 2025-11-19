@@ -9,9 +9,8 @@ MQTT_USERNAME=$(bashio::config 'mqtt_username')
 MQTT_PASSWORD=$(bashio::config 'mqtt_password')
 MQTT_TOPIC=$(bashio::config 'mqtt_topic')
 POLL_INTERVAL=$(bashio::config 'poll_interval')
-PARAM_DEFS=$(bashio::config 'param_definitions')
+PARAM_DEFS="$(bashio::config 'param_definitions' | jq -c '.')"
 
-export PARAM_DEFS="$PARAM_DEFS"
 export SINAMICS_HOST="$HOST"
 export SINAMICS_PORT="$PORT"
 export MQTT_HOST="$MQTT_HOST"
@@ -20,6 +19,8 @@ export MQTT_USERNAME="$MQTT_USERNAME"
 export MQTT_PASSWORD="$MQTT_PASSWORD"
 export MQTT_TOPIC="$MQTT_TOPIC"
 export POLL_INTERVAL="$POLL_INTERVAL"
+# Convert list to compact JSON
+export PARAM_DEFS="$PARAM_DEFS"
 
 echo "Starting Sinamics V20 bridge..."
 exec python3 bridge.py

@@ -1,6 +1,6 @@
 ---
 name: Sinamics V20 Pump Station
-version: 0.0.2
+version: 0.0.3
 slug: sinamics_v20
 description: Read Sinamics V20 Smart Access multi-pump status and publish to MQTT for Home Assistant.
 startup: services
@@ -42,6 +42,6 @@ schema:
   mqtt_username: "str?"
   mqtt_password: "str?"
   mqtt_topic: str
-  poll_interval: int
+  poll_interval: float
   param_definitions:
     - str
