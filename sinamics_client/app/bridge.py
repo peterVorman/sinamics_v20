@@ -235,7 +235,7 @@ def main():
     mqtt_username = os.getenv("MQTT_USERNAME", "")
     mqtt_password = os.getenv("MQTT_PASSWORD", "")
     mqtt_topic = os.getenv("MQTT_TOPIC", "sinamics_v20/pump_station/state")
-    poll_interval = int(os.getenv("POLL_INTERVAL", "5"))
+    poll_interval = float(os.getenv("POLL_INTERVAL", "5"))
 
     param_config = load_param_config_from_env()
     param_codes = list(param_config.keys())
