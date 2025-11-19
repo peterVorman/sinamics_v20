@@ -26,23 +26,24 @@ PARSER_REGISTRY = {
 SENSOR_HINTS = {
     # Temperature-like parameters (Celsius)
     "r0032": {
-        "device_class": "temperature",
-        "unit_of_measurement": "°C",
+        "name": "Actual filtered power",
+        "device_class": "power",
+        "unit_of_measurement": "kW",
         "state_class": "measurement",
-        "icon": "mdi:thermometer",
+        "icon": "mdi:power-socket-it",
     },
     "r0039": {
+        "name": "Energy consumpt. meter",
+        "device_class": "energy",
+        "unit_of_measurement": "kWh",
+        "state_class": "measurement",
+        "icon": "mdi:thermometer",
+    },
+    "r0035": {
         "device_class": "temperature",
         "unit_of_measurement": "°C",
         "state_class": "measurement",
         "icon": "mdi:thermometer",
-    },
-    # Current-like parameters (Amps)
-    "r0035": {
-        "device_class": "current",
-        "unit_of_measurement": "A",
-        "state_class": "measurement",
-        "icon": "mdi:current-ac",
     },
     "P1082":{
         "component": "sensor",
