@@ -191,17 +191,15 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
 
 
 def load_param_config_from_env() -> dict:
-    """Read PARAM_DEFS from env (JSON array of 'CODE:PARSER' strings).
-
-    Returns:
-        Dict mapping param code to parser name, e.g. {"r0052": "r0052_status"}.
-    """
-    raw = os.getenv("PARAM_DEFS", "[]")
-    try:
-        items = json.loads(raw)
-    except Exception as exc:
-        logger.warning("Failed to parse PARAM_DEFS, using empty list: %s", exc)
-        items = []
+    """Read param definitions from env or Home Assistant options.json."""
+    raw = os.getenv("PARAM_DEFS")
+    if raw is None or raw.strip() == "":
+        raw = "[]"
+        items = None
+        try:
+            items = json.loads(raw)
+        except Exception as exc:
+            logger.warning("Failed to parse PARAM_DEFS: %s", exc)
 
     param_config = {}
     for item in items:
