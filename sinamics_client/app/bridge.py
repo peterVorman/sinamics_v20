@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import logging
 import paho.mqtt.client as mqtt
 
 from sinamics_client import (
@@ -10,7 +11,7 @@ from sinamics_client import (
     parse_r4000_mpc_status,
 )
 
-# Доступні парсери, якими можна оперувати з конфіга
+# Available parsers registry, configurable via add-on options/env
 PARSER_REGISTRY = {
     "dds_float": parse_dds_float,
     "r0052_status": parse_r0052,
@@ -20,13 +21,81 @@ PARSER_REGISTRY = {
     "float": lambda x: float(x),
 }
 
-def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
-    """
-    Publish MQTT discovery configs for Home Assistant.
-    mqtt_topic: основний state_topic (наприклад: sinamics_v20/pump_station/state)
-    param_config: dict {"r0020": "dds_float", ...}
-    """
+# Discovery hints to enrich sensors with HA metadata.
+# Note: These are example mappings. Adjust codes to match your device manual if needed.
+SENSOR_HINTS = {
+    # Temperature-like parameters (Celsius)
+    "r0032": {
+        "device_class": "temperature",
+        "unit_of_measurement": "°C",
+        "state_class": "measurement",
+        "icon": "mdi:thermometer",
+    },
+    "r0039": {
+        "device_class": "temperature",
+        "unit_of_measurement": "°C",
+        "state_class": "measurement",
+        "icon": "mdi:thermometer",
+    },
+    # Current-like parameters (Amps)
+    "r0035": {
+        "device_class": "current",
+        "unit_of_measurement": "A",
+        "state_class": "measurement",
+        "icon": "mdi:current-ac",
+    },
+    "P1082":{
+        "component": "sensor",
+        "name": "Max frequency",
+        "unit_of_measurement": "Hz",
+        "icon": "mdi:sine-wave",
+        "state_class": "measurement",
+    },
+    "P1080": {
+        "component": "sensor",
+        "name": "Min frequency",
+        "unit_of_measurement": "Hz",
+        "icon": "mdi:sine-wave",
+        "state_class": "measurement",
+    },
+    "P2390": {
+        "component": "sensor",
+        "name": "PID hibernation setpoint",
+        "unit_of_measurement": "%",
+        "icon": "mdi:chart-line",
+    },
+    "r2273": {
+        "component": "sensor",
+        "name": "PID error",
+        "unit_of_measurement": "%",
+        "icon": "mdi:chart-line",
+    },
+    "r4026": {
+        "component": "sensor",
+        "name": "Motor 1 operating hours",
+        "unit_of_measurement": "H",
+        "icon": "mdi:chart-line",
+    },
+    "r4027": {
+        "component": "sensor",
+        "name": "Motor 2 operating hours",
+        "unit_of_measurement": "H",
+        "icon": "mdi:chart-line",
+    },
 
+}
+
+logger = logging.getLogger(__name__)
+
+
+def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
+    """Publish MQTT discovery configurations for Home Assistant.
+
+    Args:
+        mqtt_client: Connected Paho MQTT client.
+        mqtt_topic: State topic (e.g., "sinamics_v20/pump_station/state").
+        param_config: Dict mapping param code to parser name, e.g. {"r0020": "dds_float"}.
+    """
     base_device = {
         "identifiers": ["sinamics_pump_station"],
         "name": "Pump Station",
@@ -34,8 +103,7 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
         "model": "Sinamics V20",
     }
 
-    # --------------- Основні сенсори ----------------
-
+    # Core sensors
     discovery = {
         "sinamics_pump_state": {
             "component": "sensor",
@@ -91,9 +159,7 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
         },
     }
 
-    # --------------- Сенсори з param_definitions ----------------
-    # Для кожного від param_config
-
+    # Sensors for configured param_definitions
     for code in param_config.keys():
         uid = f"sinamics_param_{code}"
         discovery[uid] = {
@@ -102,12 +168,14 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
             "value_template": f"{{{{ value_json.params.{code}.parsed }}}}",
             "icon": "mdi:code-braces",
         }
+        # Apply HA discovery hints for known temperature/current parameters
+        hints = SENSOR_HINTS.get(code)
+        if hints:
+            discovery[uid].update(hints)
 
-    # --------------- Публікація discovery ----------------
-
+    # Publish discovery entries
     for uid, cfg in discovery.items():
         component = cfg.pop("component")
-
         discovery_topic = f"homeassistant/{component}/{uid}/config"
 
         payload = {
@@ -116,27 +184,23 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
             "state_topic": mqtt_topic,
             "device": base_device,
         }
+        payload.update(cfg)
 
-        payload.update(cfg)  # додаємо value_template, icon, unit_of_measurement
+        mqtt_client.publish(discovery_topic, json.dumps(payload), retain=True)
+        logger.info("Published discovery: %s", discovery_topic)
 
-        mqtt_client.publish(
-            discovery_topic,
-            json.dumps(payload),
-            retain=True,
-        )
-
-        print(f"Published discovery: {discovery_topic}")
 
 def load_param_config_from_env() -> dict:
-    """
-    Читає PARAM_DEFS з env (JSON-масив рядків 'код:парсер')
-    і повертає dict { "r0052": "r0052_status", ... }.
+    """Read PARAM_DEFS from env (JSON array of 'CODE:PARSER' strings).
+
+    Returns:
+        Dict mapping param code to parser name, e.g. {"r0052": "r0052_status"}.
     """
     raw = os.getenv("PARAM_DEFS", "[]")
     try:
         items = json.loads(raw)
-    except Exception as e:
-        print("Failed to parse PARAM_DEFS, using empty list:", e)
+    except Exception as exc:
+        logger.warning("Failed to parse PARAM_DEFS, using empty list: %s", exc)
         items = []
 
     param_config = {}
@@ -152,10 +216,19 @@ def load_param_config_from_env() -> dict:
         if code:
             param_config[code] = parser_name
 
-    print("Loaded param definitions:", param_config)
+    logger.info("Loaded param definitions: %s", param_config)
     return param_config
-    
+
+
 def main():
+    """Entrypoint for the add-on bridge: poll device and publish to MQTT."""
+    # Configure logging once in the entrypoint (stdout for add-on)
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.INFO),
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+
     host = os.getenv("SINAMICS_HOST", "192.168.1.1")
     port = int(os.getenv("SINAMICS_PORT", "80"))
 
@@ -169,9 +242,11 @@ def main():
     param_config = load_param_config_from_env()
     param_codes = list(param_config.keys())
 
-    print(f"Sinamics host: {host}:{port}")
-    print(f"MQTT: {mqtt_host}:{mqtt_port}, topic={mqtt_topic}, interval={poll_interval}s")
-    print(f"Parameters to poll: {param_codes}")
+    logger.info("Sinamics host: %s:%s", host, port)
+    logger.info(
+        "MQTT: %s:%s, topic=%s, interval=%ss", mqtt_host, mqtt_port, mqtt_topic, poll_interval
+    )
+    logger.info("Parameters to poll: %s", param_codes)
 
     client = SinamicsV20Client(host, port, "/")
 
@@ -184,16 +259,16 @@ def main():
         # Publish discovery configs
         publish_discovery_configs(mqtt_client, mqtt_topic, param_config)
     except Exception:
-        print("Connection to MQTT failed.")
+        logger.exception("Connection to MQTT failed.")
 
     try:
         client.connect()
         while True:
             try:
-                # Базовий агрегований стан (якщо хочеш зберегти read_station_state)
+                # Read aggregated station state
                 base_state = client.read_station_state()
 
-                # Дочитуємо/або пере-читуємо параметри із конфігурації
+                # Read additional configured parameters
                 extra_raw = client.read_params_batch(param_codes) if param_codes else {}
 
                 extra_parsed = {}
@@ -207,8 +282,14 @@ def main():
                     else:
                         try:
                             parsed = parser_fn(raw_val)
-                        except Exception as e:
-                            parsed = {"raw": raw_val, "parse_error": str(e)}
+                        except Exception as exc:
+                            parsed = {"raw": raw_val, "parse_error": str(exc)}
+                            logger.warning(
+                                "Parsing error for %s with parser %s: %s",
+                                code,
+                                parser_name,
+                                exc,
+                            )
 
                     extra_parsed[code] = {
                         "raw": raw_val,
@@ -217,22 +298,23 @@ def main():
                         "index": meta.get("index"),
                     }
 
-                # Додаємо секцію "params" з конфігованими параметрами
+                # Attach configured params section
                 base_state["params"] = extra_parsed
 
                 payload = json.dumps(base_state, default=str)
                 mqtt_client.publish(mqtt_topic, payload, qos=0, retain=False)
+                logger.debug("Published state to %s", mqtt_topic)
                 time.sleep(poll_interval)
-            except Exception as e:
-                print("Error reading/publishing state:", e)
+            except Exception:
+                logger.exception("Error reading/publishing state")
                 time.sleep(poll_interval)
     except KeyboardInterrupt:
-        print("Stopped by user")
+        logger.info("Stopped by user")
     finally:
         client.close()
         mqtt_client.loop_stop()
         mqtt_client.disconnect()
-
+        logger.info("Cleaned up and disconnected")
 
 
 if __name__ == "__main__":

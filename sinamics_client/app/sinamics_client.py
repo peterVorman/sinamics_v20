@@ -3,16 +3,22 @@ import base64
 import os
 import struct
 import time
-from pprint import pprint
+import logging
+from pprint import pformat
 from typing import Dict, List, Optional, Callable, Any
+
+logger = logging.getLogger(__name__)
 
 
 class SinamicsV20Client:
+    """Minimal WebSocket client for Sinamics V20 Smart Access."""
+
     def __init__(self, host: str = "192.168.1.1", port: int = 80, path: str = "/"):
         self.host = host
         self.port = port
         self.path = path
         self.sock: Optional[socket.socket] = None
+        # Built-in parsers. Can be extended externally if needed.
         self.parsers = {
             "r0052": parse_r0052,
             "r0020": parse_dds_float,
@@ -24,25 +30,26 @@ class SinamicsV20Client:
             "P1080": parse_dds_float,  # Minimum frequency [Hz]
             "P1082": parse_dds_float,  # Maximum frequency [Hz]
             "r2260": parse_dds_float,  # PID setpoint after PID-RFG
-            "r2294": parse_dds_float,  # Act.PID output
+            "r2294": parse_dds_float,  # Act. PID output
             "P2390": parse_dds_float,  # PID hibernation setpoint [%]
             "r4026": parse_dds_float,  # Multi-pump abs. operating hours: motor 1 [h]
             "r4027": parse_dds_float,  # Multi-pump abs. operating hours: motor 2 [h]
             "r2273": parse_dds_float,  # PID error
-            "P4013": parse_dds_float,  # Multi-pump control motor number configuration (залежить від типу в мануалі)
+            "P4013": parse_dds_float,  # Multi-pump control motor number configuration
             "P2372": parse_dds_float,  # Motor staging cycling
             "P2371": parse_dds_float,  # Motor staging cycling
             "r4000": parse_r4000_mpc_status,
-    }
+        }
 
     # -------------------------------------------------------------------------
     # Low-level WebSocket
     # -------------------------------------------------------------------------
 
     def connect(self, timeout: float = 5.0):
-        """
-        Open TCP + WebSocket handshake (без перевірки Sec-WebSocket-Accept).
-        timeout – щоб не висіти вічно, якщо девайс не відповідає.
+        """Open TCP + WebSocket handshake (without verifying Sec-WebSocket-Accept).
+
+        Args:
+            timeout: Socket connection timeout in seconds.
         """
         key = base64.b64encode(os.urandom(16)).decode("ascii")
 
@@ -62,7 +69,7 @@ class SinamicsV20Client:
         self.sock = socket.create_connection((self.host, self.port), timeout=timeout)
         self.sock.sendall(request)
 
-        # Read HTTP headers до \r\n\r\n
+        # Read HTTP headers until \r\n\r\n
         response = b""
         while b"\r\n\r\n" not in response:
             chunk = self.sock.recv(4096)
@@ -70,12 +77,15 @@ class SinamicsV20Client:
                 raise RuntimeError("Connection closed during handshake")
             response += chunk
 
-        print("=== Handshake response ===")
-        print(response.split(b"\r\n\r\n", 1)[0].decode("ascii", errors="replace"))
-        print("==========================")
-        print("WebSocket connected (Sinamics V20 Smart Access)")
+        try:
+            header = response.split(b"\r\n\r\n", 1)[0].decode("ascii", errors="replace")
+        except Exception:
+            header = "<failed to decode header>"
+        logger.debug("Handshake response header:\n%s", header)
+        logger.info("WebSocket connected (Sinamics V20 Smart Access)")
 
     def close(self):
+        """Close underlying socket."""
         if self.sock:
             try:
                 self.sock.close()
@@ -87,9 +97,10 @@ class SinamicsV20Client:
             raise RuntimeError("Socket is not connected. Call connect() first.")
 
     def _send_frame(self, text: str):
-        """
-        Send WebSocket text frame.
-        Багато embedded-пристроїв люблять закінчення рядка, тому додаємо \n.
+        """Send a WebSocket text frame.
+
+        Note:
+            Many embedded devices prefer line endings; append newline.
         """
         self._ensure_sock()
         payload = (text + "\n").encode("utf-8")
@@ -117,20 +128,20 @@ class SinamicsV20Client:
         self.sock.sendall(header + masked_payload)
 
     def _recv_frame(self) -> Optional[str]:
-        """
-        Receive one WebSocket text frame.
+        """Receive one WebSocket text frame.
+
         Returns:
-            str  - payload
-            None - if server closed the connection.
+            str: Decoded payload.
+            None: If server closed the connection.
         """
         self._ensure_sock()
 
         first_two = self.sock.recv(2)
         if not first_two:
-            print("Server closed the connection (no frame header)")
+            logger.warning("Server closed the connection (no frame header)")
             return None
         if len(first_two) < 2:
-            print("Connection closed while reading frame header")
+            logger.warning("Connection closed while reading frame header")
             return None
 
         b1, b2 = first_two
@@ -138,20 +149,20 @@ class SinamicsV20Client:
         masked = (b2 & 0x80) != 0
         length = b2 & 0x7F
 
-        if opcode == 0x8:  # close
-            print("Received close frame")
+        if opcode == 0x8:  # close frame
+            logger.info("Received WebSocket close frame")
             return None
 
         if length == 126:
             ext = self.sock.recv(2)
             if len(ext) < 2:
-                print("Connection closed while reading extended length")
+                logger.warning("Connection closed while reading extended length (16-bit)")
                 return None
             (length,) = struct.unpack("!H", ext)
         elif length == 127:
             ext = self.sock.recv(8)
             if len(ext) < 8:
-                print("Connection closed while reading extended length")
+                logger.warning("Connection closed while reading extended length (64-bit)")
                 return None
             (length,) = struct.unpack("!Q", ext)
 
@@ -159,14 +170,14 @@ class SinamicsV20Client:
         if masked:
             mask = self.sock.recv(4)
             if len(mask) < 4:
-                print("Connection closed while reading mask")
+                logger.warning("Connection closed while reading mask")
                 return None
 
         payload = b""
         while len(payload) < length:
             chunk = self.sock.recv(length - len(payload))
             if not chunk:
-                print("Connection closed in the middle of a frame")
+                logger.warning("Connection closed mid-frame")
                 return None
             payload += chunk
 
@@ -180,32 +191,33 @@ class SinamicsV20Client:
     # -------------------------------------------------------------------------
 
     def send_command(self, cmd: str) -> Optional[str]:
-        """Send single command (faSum, readPara, queryIdent, ...) and read one reply."""
+        """Send a single command (faSum, readPara, queryIdent, ...) and read one reply."""
         self._send_frame(cmd)
-        print(f">>> {cmd}")
+        logger.debug(">>> %s", cmd)
         resp = self._recv_frame()
         if resp is not None:
-            print(f"<<< {resp}")
+            logger.debug("<<< %s", resp)
         return resp
 
     def send_batch(self, cmds: List[str]) -> List[str]:
-        """
-        Send multiple commands в одному фреймі через '||'.
-        Returns list of replies (по одному фрейму на команду).
+        """Send multiple commands in a single frame using '||'.
+
+        Returns:
+            List of replies (one frame per command).
         """
         if not cmds:
             return []
 
         payload = "||".join(cmds)
         self._send_frame(payload)
-        print(f">>> {payload}")
+        logger.debug(">>> %s", payload)
 
         replies = []
         for _ in cmds:
             resp = self._recv_frame()
             if resp is None:
                 break
-            print(f"<<< {resp}")
+            logger.debug("<<< %s", resp)
             replies.append(resp)
         return replies
 
@@ -214,22 +226,20 @@ class SinamicsV20Client:
     # -------------------------------------------------------------------------
 
     def query_ident(self) -> Optional[Dict[str, Any]]:
-        """
-        queryIdent -> queryIdent,200,<string with model & params>
-        """
+        """queryIdent -> queryIdent,200,<string with model & params>"""
         resp = self.send_command("queryIdent")
         if resp is None:
             return None
 
         parts = resp.split(",")
         if len(parts) < 2 or parts[0] != "queryIdent":
-            print("Unexpected queryIdent response:", resp)
+            logger.warning("Unexpected queryIdent response: %s", resp)
             return None
 
         try:
             status = int(parts[1])
         except ValueError:
-            print("Invalid status in queryIdent:", parts[1])
+            logger.warning("Invalid status in queryIdent: %s", parts[1])
             return None
 
         info = parts[2] if len(parts) > 2 else ""
@@ -238,26 +248,24 @@ class SinamicsV20Client:
             "status": status,
             "raw": info,
             "model": info_parts[0] if len(info_parts) > 0 else None,
-            "extra": info_parts[1:],  # версію, напругу, частоту і т.д. можна розібрати з мануалу
+            "extra": info_parts[1:],  # Version, voltage, frequency, etc.
         }
 
     def report_status(self) -> Optional[Dict[str, Any]]:
-        """
-        reportStatus -> reportStatus,200,0,en00000000013338,4
-        """
+        """reportStatus -> reportStatus,200,0,en00000000013338,4"""
         resp = self.send_command("reportStatus")
         if resp is None:
             return None
 
         parts = resp.split(",")
         if len(parts) < 3 or parts[0] != "reportStatus":
-            print("Unexpected reportStatus response:", resp)
+            logger.warning("Unexpected reportStatus response: %s", resp)
             return None
 
         try:
             status = int(parts[1])
         except ValueError:
-            print("Invalid status in reportStatus:", parts[1])
+            logger.warning("Invalid status in reportStatus: %s", parts[1])
             return None
 
         return {
@@ -267,23 +275,20 @@ class SinamicsV20Client:
         }
 
     def fa_sum(self) -> Optional[Dict[str, Any]]:
-        """
-        faSum -> faSum,200,0,0,4
-        згідно мануалу це сумарний статус аварій/попереджень (потрібно звірити значення).
-        """
+        """faSum -> faSum,200,0,0,4 (aggregated faults/warnings)."""
         resp = self.send_command("faSum")
         if resp is None:
             return None
 
         parts = resp.split(",")
         if len(parts) < 2 or parts[0] != "faSum":
-            print("Unexpected faSum response:", resp)
+            logger.warning("Unexpected faSum response: %s", resp)
             return None
 
         try:
             status = int(parts[1])
         except ValueError:
-            print("Invalid status in faSum:", parts[1])
+            logger.warning("Invalid status in faSum: %s", parts[1])
             return None
 
         nums: List[int] = []
@@ -291,7 +296,7 @@ class SinamicsV20Client:
             try:
                 nums.append(int(x))
             except ValueError:
-                # пропускаємо не-числові поля, але не падаємо
+                # Skip non-numeric fields but do not fail
                 pass
 
         return {
@@ -301,10 +306,18 @@ class SinamicsV20Client:
         }
 
     def read_param(self, name: str, index: int = -1, length: int = 4) -> Optional[Dict[str, Any]]:
-        """
-        readPara,11,<name>,<index>,<length>
-        -> readPara,200,<name>,<index>,<value>
-        name: 'P0007', 'P0003', 'r0002', ...
+        """Read a single parameter via readPara command.
+
+        Protocol:
+            readPara,11,<name>,<index>,<length> -> readPara,200,<name>,<index>,<value>
+
+        Args:
+            name: Parameter name, e.g. 'P0007', 'P0003', 'r0002'.
+            index: Parameter index, default -1.
+            length: Data length, default 4.
+
+        Returns:
+            Dict with status, name, index and raw value when successful, otherwise None.
         """
         cmd = f"readPara,11,{name},{index},{length}"
         resp = self.send_command(cmd)
@@ -313,14 +326,14 @@ class SinamicsV20Client:
 
         parts = resp.split(",")
         if len(parts) < 5 or parts[0] != "readPara":
-            print("Unexpected readPara response:", resp)
+            logger.warning("Unexpected readPara response: %s", resp)
             return None
 
         try:
             status = int(parts[1])
             idx = int(parts[3])
         except ValueError:
-            print("Invalid status/index in readPara:", parts)
+            logger.warning("Invalid status/index in readPara: %s", parts)
             return None
 
         return {
@@ -331,9 +344,15 @@ class SinamicsV20Client:
         }
 
     def read_params_batch(self, names: List[str], index: int = -1, length: int = 4) -> Dict[str, Dict[str, Any]]:
-        """
-        Відправляє кілька readPara в одному фреймі через ||
-        і повертає dict name -> info.
+        """Read multiple parameters using a single batch (||-joined) request.
+
+        Args:
+            names: List of parameter names.
+            index: Parameter index, default -1.
+            length: Data length, default 4.
+
+        Returns:
+            Dict name -> info dict with status, index, and raw value.
         """
         if not names:
             return {}
@@ -345,14 +364,14 @@ class SinamicsV20Client:
         for resp in replies:
             parts = resp.split(",")
             if len(parts) < 5 or parts[0] != "readPara":
-                print("Unexpected readPara batch response:", resp)
+                logger.warning("Unexpected readPara batch response: %s", resp)
                 continue
 
             try:
                 status = int(parts[1])
                 idx = int(parts[3])
             except ValueError:
-                print("Invalid status/index in batch readPara:", parts)
+                logger.warning("Invalid status/index in batch readPara: %s", parts)
                 continue
 
             name = parts[2]
@@ -373,34 +392,32 @@ class SinamicsV20Client:
         params: List[str],
         callback: Optional[Callable[[Dict[str, Dict[str, Any]]], None]] = None,
     ):
-        """
-        Простий цикл моніторингу:
-        - кожні interval_sec читає задані параметри (batch read)
-        - викликає callback(result_dict) або просто друкує їх.
+        """Simple monitoring loop: reads given params by batch and calls callback.
+
+        Args:
+            interval_sec: Interval in seconds between reads.
+            params: Parameter names to read.
+            callback: Optional callback taking the result dict.
         """
         try:
             while True:
                 try:
                     data = self.read_params_batch(params)
-                except (OSError, RuntimeError) as e:
-                    print(f"Read error: {e}")
+                except (OSError, RuntimeError) as exc:
+                    logger.error("Read error: %s", exc)
                     break
 
                 if callback:
                     callback(data)
                 else:
-                    print("MON:", data)
+                    logger.info("Monitor data: %s", pformat(data))
                 time.sleep(interval_sec)
         except KeyboardInterrupt:
-            print("Monitoring stopped by user.")
+            logger.info("Monitoring stopped by user.")
 
     def read_station_state(self) -> Dict[str, Any]:
-        """
-        Прочитати ключові параметри і повернути зведений стан насосної станції
-        (multi-pump + привід + PID + частоти).
-        """
-
-        # Які параметри читаємо одним batch
+        """Read key parameters and return an aggregated station state."""
+        # Parameters to read in one batch
         param_names = [
             "r0052",   # Active status word 1
             "r4000",   # Multi-pump control status word
@@ -419,12 +436,9 @@ class SinamicsV20Client:
 
         raw_params = self.read_params_batch(param_names)
 
-        # Підтягуємо faSum/reportStatus окремо
+        # Retrieve faSum/reportStatus separately
         fa = self.fa_sum()
         rep = self.report_status()
-
-        # Локально підтягнемо парсери (можеш винести у глобальну змінну)
-        from pprint import pprint  # якщо хочеш дебажити
 
         def safe_parse(name: str, raw: Optional[str]) -> Any:
             if raw is None:
@@ -434,17 +448,18 @@ class SinamicsV20Client:
                 return raw
             try:
                 return parser(raw)
-            except Exception as e:
-                return {"raw": raw, "parse_error": str(e)}
+            except Exception as exc:
+                logger.warning("Parse error for %s with raw=%s: %s", name, raw, exc)
+                return {"raw": raw, "parse_error": str(exc)}
 
-        # Розпарсимо “важкі” статуси
+        # Parse "heavy" status words
         r0052_raw = raw_params.get("r0052", {}).get("value_raw")
         r4000_raw = raw_params.get("r4000", {}).get("value_raw")
 
         drive_status = safe_parse("r0052", r0052_raw) or {}
         mpc_status = safe_parse("r4000", r4000_raw) or {}
 
-        # Частоти / напруга
+        # Frequencies / voltage
         freq_set_before = safe_parse("r0020", raw_params.get("r0020", {}).get("value_raw"))
         freq_actual = safe_parse("r0021", raw_params.get("r0021", {}).get("value_raw"))
         u_out = safe_parse("r0072", raw_params.get("r0072", {}).get("value_raw"))
@@ -455,15 +470,15 @@ class SinamicsV20Client:
         pid_err = safe_parse("r2273", raw_params.get("r2273", {}).get("value_raw"))
         pid_hib = safe_parse("P2390", raw_params.get("P2390", {}).get("value_raw"))
 
-        # Межі частоти
+        # Frequency limits
         f_min = safe_parse("P1080", raw_params.get("P1080", {}).get("value_raw"))
         f_max = safe_parse("P1082", raw_params.get("P1082", {}).get("value_raw"))
 
-        # Напрацювання двигунів
+        # Motor operating hours
         h_m1 = safe_parse("r4026", raw_params.get("r4026", {}).get("value_raw"))
         h_m2 = safe_parse("r4027", raw_params.get("r4027", {}).get("value_raw"))
 
-        # Умовні статуси “зручною мовою”
+        # High-level status
         any_motor_running = any([
             mpc_status.get("motor1_on"),
             mpc_status.get("motor2_on"),
@@ -493,19 +508,16 @@ class SinamicsV20Client:
 
         return {
             "timestamp": time.time(),
-
             "high_level": {
-                "state": high_level_state,       # "running" / "stopped" / "ready" / "fault"
+                "state": high_level_state,  # "running" / "stopped" / "ready" / "fault"
                 "has_fault": has_fault,
                 "has_warning": has_warning,
             },
-
             "drive": {
                 "status_word": drive_status,
                 "report_status": rep,
                 "fa_sum": fa,
             },
-
             "multi_pump": {
                 "status": mpc_status,
                 "running_motors": [
@@ -520,44 +532,35 @@ class SinamicsV20Client:
                     ) if flag
                 ],
             },
-
             "frequency": {
                 "setpoint_before_rfg_hz": freq_set_before,
                 "actual_filtered_hz": freq_actual,
                 "min_hz": f_min,
                 "max_hz": f_max,
             },
-
-            "voltage": {
-                "u_out_v": u_out,
-            },
-
+            "voltage": {"u_out_v": u_out},
             "pid": {
                 "setpoint_after_rfg": pid_set_after,
                 "output": pid_out,
                 "error": pid_err,
                 "hibernation_setpoint_pct": pid_hib,
             },
-
             "operating_hours": {
                 "motor1_h": h_m1,
                 "motor2_h": h_m2,
             },
-
-            "raw_params": raw_params,  # на випадок дебагу/лонг-логів
+            "raw_params": raw_params,
         }
 
 
 def parse_r0052(status_word) -> dict:
-    """
-    Парсить r0052 (CO/BO: Active status word 1, U16) в набір прапорців.
-    """
+    """Parse r0052 (CO/BO: Active status word 1, U16) into flags."""
     status_word = int(status_word)
 
     def bit(n: int) -> int:
         return (status_word >> n) & 0x1
 
-    # Активні-високі біти (1 = активний стан)
+    # Active-high bits (1 = active state)
     converter_ready = bool(bit(0))
     ready_to_run = bool(bit(1))
     operation_enabled = bool(bit(2))
@@ -569,14 +572,14 @@ def parse_r0052(status_word) -> dict:
     brake_open = bool(bit(12))
     motor_runs_right = bool(bit(14))
 
-    # Активні-низькі біти (0 = активний стан)
+    # Active-low bits (0 = active state)
     off2_active = (bit(4) == 0)
     off3_active = (bit(5) == 0)
     current_torque_limit_warn = (bit(11) == 0)
     motor_overload = (bit(13) == 0)
     converter_overload = (bit(15) == 0)
 
-    # Deviation setpoint/act.value: 1 = No, 0 = Yes → активний стан, коли біт = 0
+    # Deviation setpoint/act.value: 1 = No, 0 = Yes → active when bit = 0
     deviation_active = (bit(8) == 0)
 
     return {
@@ -649,25 +652,25 @@ def parse_r4000_mpc_status(status_word) -> dict:
     }
 
 
-if __name__ == "__main__":
-    client = SinamicsV20Client("192.168.1.1", 80, "/")
-
-    client.connect()
-
-    ident = client.query_ident()
-    print("IDENT:")
-    pprint(ident)
-
-    status = client.report_status()
-    print("STATUS:")
-    pprint(status)
-
-    fa = client.fa_sum()
-    print("FA:")
-    pprint(fa)
-
-
-    state = client.read_station_state()
-    pprint(state, indent=2)
-
-    client.close()
+# if __name__ == "__main__":
+#     client = SinamicsV20Client("192.168.1.1", 80, "/")
+#
+#     client.connect()
+#
+#     ident = client.query_ident()
+#     print("IDENT:")
+#     pprint(ident)
+#
+#     status = client.report_status()
+#     print("STATUS:")
+#     pprint(status)
+#
+#     fa = client.fa_sum()
+#     print("FA:")
+#     pprint(fa)
+#
+#
+#     state = client.read_station_state()
+#     pprint(state, indent=2)
+#
+#     client.close()
