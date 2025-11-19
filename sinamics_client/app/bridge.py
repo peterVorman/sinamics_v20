@@ -40,50 +40,12 @@ SENSOR_HINTS = {
         "icon": "mdi:thermometer",
     },
     "r0035": {
+        "name": "Actual motor temperature",
         "device_class": "temperature",
         "unit_of_measurement": "°C",
         "state_class": "measurement",
         "icon": "mdi:thermometer",
-    },
-    "P1082":{
-        "component": "sensor",
-        "name": "Max frequency",
-        "unit_of_measurement": "Hz",
-        "icon": "mdi:sine-wave",
-        "state_class": "measurement",
-    },
-    "P1080": {
-        "component": "sensor",
-        "name": "Min frequency",
-        "unit_of_measurement": "Hz",
-        "icon": "mdi:sine-wave",
-        "state_class": "measurement",
-    },
-    "P2390": {
-        "component": "sensor",
-        "name": "PID hibernation setpoint",
-        "unit_of_measurement": "%",
-        "icon": "mdi:chart-line",
-    },
-    "r2273": {
-        "component": "sensor",
-        "name": "PID error",
-        "unit_of_measurement": "%",
-        "icon": "mdi:chart-line",
-    },
-    "r4026": {
-        "component": "sensor",
-        "name": "Motor 1 operating hours",
-        "unit_of_measurement": "H",
-        "icon": "mdi:chart-line",
-    },
-    "r4027": {
-        "component": "sensor",
-        "name": "Motor 2 operating hours",
-        "unit_of_measurement": "H",
-        "icon": "mdi:chart-line",
-    },
-
+    }
 }
 
 logger = logging.getLogger(__name__)
@@ -106,6 +68,20 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
 
     # Core sensors
     discovery = {
+        "sinamics_motor1_h": {
+            "component": "sensor",
+            "name": "Motor 1 operating hours",
+            "value_template": "{{ value_json.operating_hours.motor1_h }}",
+            "unit_of_measurement": "H",
+            "icon": "mdi:chart-line",
+        },
+        "sinamics_motor2_h": {
+            "component": "sensor",
+            "name": "Motor 2 operating hours",
+            "value_template": "{{ value_json.operating_hours.motor2_h }}",
+            "unit_of_measurement": "H",
+            "icon": "mdi:chart-line",
+        },
         "sinamics_pump_state": {
             "component": "sensor",
             "name": "Pump Station State",
@@ -126,8 +102,29 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
         },
         "sinamics_pump_freq_actual": {
             "component": "sensor",
-            "name": "Pump Actual Frequency",
+            "name": "Actual Frequency",
             "value_template": "{{ value_json.frequency.actual_filtered_hz }}",
+            "unit_of_measurement": "Hz",
+            "icon": "mdi:sine-wave",
+        },
+        "sinamics_pump_setpoint_before_rfg_hz": {
+            "component": "sensor",
+            "name": "Frequency setpoint",
+            "value_template": "{{ value_json.frequency.setpoint_before_rfg_hz }}",
+            "unit_of_measurement": "Hz",
+            "icon": "mdi:sine-wave",
+        },
+        "sinamics_pump_freq_min": {
+            "component": "sensor",
+            "name": "Frequency min",
+            "value_template": "{{ value_json.frequency.min_hz }}",
+            "unit_of_measurement": "Hz",
+            "icon": "mdi:sine-wave",
+        },
+        "sinamics_pump_freq_max": {
+            "component": "sensor",
+            "name": "Frequency max",
+            "value_template": "{{ value_json.frequency.max_hz }}",
             "unit_of_measurement": "Hz",
             "icon": "mdi:sine-wave",
         },
@@ -147,8 +144,29 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
         },
         "sinamics_pump_pid_output": {
             "component": "sensor",
-            "name": "Pump PID Output",
+            "name": "PID Output",
             "value_template": "{{ value_json.pid.output }}",
+            "unit_of_measurement": "%",
+            "icon": "mdi:chart-line",
+        },
+        "sinamics_pump_pid_setpoint_after_rfg": {
+            "component": "sensor",
+            "name": "PID Setpoint",
+            "value_template": "{{ value_json.pid.setpoint_after_rfg }}",
+            "unit_of_measurement": "%",
+            "icon": "mdi:chart-line",
+        },
+        "sinamics_pump_pid_error": {
+            "component": "sensor",
+            "name": "PID error",
+            "value_template": "{{ value_json.pid.error }}",
+            "unit_of_measurement": "%",
+            "icon": "mdi:chart-line",
+        },
+        "sinamics_pump_pid_hibernation_setpoint_pct": {
+            "component": "sensor",
+            "name": "PID hibernation setpoint",
+            "value_template": "{{ value_json.pid.hibernation_setpoint_pct }}",
             "unit_of_measurement": "%",
             "icon": "mdi:chart-line",
         },
@@ -157,7 +175,7 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
             "name": "Pump Running Motors",
             "value_template": "{{ value_json.multi_pump.running_motors | join(',') }}",
             "icon": "mdi:pump",
-        },
+        }
     }
 
     # Sensors for configured param_definitions

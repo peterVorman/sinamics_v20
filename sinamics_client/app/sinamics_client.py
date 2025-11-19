@@ -437,7 +437,6 @@ class SinamicsV20Client:
         raw_params = self.read_params_batch(param_names)
 
         # Retrieve faSum/reportStatus separately
-        fa = self.fa_sum()
         rep = self.report_status()
 
         def safe_parse(name: str, raw: Optional[str]) -> Any:
@@ -516,7 +515,6 @@ class SinamicsV20Client:
             "drive": {
                 "status_word": drive_status,
                 "report_status": rep,
-                "fa_sum": fa,
             },
             "multi_pump": {
                 "status": mpc_status,
