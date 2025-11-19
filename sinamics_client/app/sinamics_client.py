@@ -393,6 +393,7 @@ class SinamicsV20Client:
                 time.sleep(interval_sec)
         except KeyboardInterrupt:
             print("Monitoring stopped by user.")
+
     def read_station_state(self) -> Dict[str, Any]:
         """
         Прочитати ключові параметри і повернути зведений стан насосної станції
@@ -669,19 +670,4 @@ if __name__ == "__main__":
     state = client.read_station_state()
     pprint(state, indent=2)
 
-    # params_to_watch = list(client.parsers.keys())
-    #
-    # def print_callback(data):
-    #     for param, value in data.items():
-    #         parser = client.parsers.get(param)
-    #         raw = value.get("value_raw")
-    #         if parser and raw is not None:
-    #             try:
-    #                 value["parsed_value"] = parser(raw)
-    #             except Exception as e:
-    #                 value["parsed_value"] = None
-    #                 value["parse_error"] = str(e)
-    #     pprint(data, indent=2)
-    #
-    # client.monitor(interval_sec=5.0, params=params_to_watch, callback=print_callback)
     client.close()

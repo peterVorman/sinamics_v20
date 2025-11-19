@@ -20,6 +20,112 @@ PARSER_REGISTRY = {
     "float": lambda x: float(x),
 }
 
+def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
+    """
+    Publish MQTT discovery configs for Home Assistant.
+    mqtt_topic: основний state_topic (наприклад: sinamics_v20/pump_station/state)
+    param_config: dict {"r0020": "dds_float", ...}
+    """
+
+    base_device = {
+        "identifiers": ["sinamics_pump_station"],
+        "name": "Pump Station",
+        "manufacturer": "Siemens",
+        "model": "Sinamics V20",
+    }
+
+    # --------------- Основні сенсори ----------------
+
+    discovery = {
+        "sinamics_pump_state": {
+            "component": "sensor",
+            "name": "Pump Station State",
+            "value_template": "{{ value_json.high_level.state }}",
+            "icon": "mdi:pump",
+        },
+        "sinamics_pump_fault": {
+            "component": "binary_sensor",
+            "name": "Pump Station Fault",
+            "value_template": "{{ value_json.high_level.has_fault }}",
+            "device_class": "problem",
+        },
+        "sinamics_pump_warning": {
+            "component": "binary_sensor",
+            "name": "Pump Station Warning",
+            "value_template": "{{ value_json.high_level.has_warning }}",
+            "icon": "mdi:alert",
+        },
+        "sinamics_pump_freq_actual": {
+            "component": "sensor",
+            "name": "Pump Actual Frequency",
+            "value_template": "{{ value_json.frequency.actual_filtered_hz }}",
+            "unit_of_measurement": "Hz",
+            "icon": "mdi:sine-wave",
+        },
+        "sinamics_pump_freq_setpoint": {
+            "component": "sensor",
+            "name": "Pump Setpoint Frequency",
+            "value_template": "{{ value_json.frequency.setpoint_before_rfg_hz }}",
+            "unit_of_measurement": "Hz",
+            "icon": "mdi:sine-wave",
+        },
+        "sinamics_pump_voltage": {
+            "component": "sensor",
+            "name": "Pump Output Voltage",
+            "value_template": "{{ value_json.voltage.u_out_v }}",
+            "unit_of_measurement": "V",
+            "icon": "mdi:alpha-v-circle-outline",
+        },
+        "sinamics_pump_pid_output": {
+            "component": "sensor",
+            "name": "Pump PID Output",
+            "value_template": "{{ value_json.pid.output }}",
+            "unit_of_measurement": "%",
+            "icon": "mdi:chart-line",
+        },
+        "sinamics_pump_running_motors": {
+            "component": "sensor",
+            "name": "Pump Running Motors",
+            "value_template": "{{ value_json.multi_pump.running_motors | join(',') }}",
+            "icon": "mdi:pump",
+        },
+    }
+
+    # --------------- Сенсори з param_definitions ----------------
+    # Для кожного від param_config
+
+    for code in param_config.keys():
+        uid = f"sinamics_param_{code}"
+        discovery[uid] = {
+            "component": "sensor",
+            "name": f"Sinamics {code}",
+            "value_template": f"{{{{ value_json.params.{code}.parsed }}}}",
+            "icon": "mdi:code-braces",
+        }
+
+    # --------------- Публікація discovery ----------------
+
+    for uid, cfg in discovery.items():
+        component = cfg.pop("component")
+
+        discovery_topic = f"homeassistant/{component}/{uid}/config"
+
+        payload = {
+            "name": cfg.pop("name"),
+            "unique_id": uid,
+            "state_topic": mqtt_topic,
+            "device": base_device,
+        }
+
+        payload.update(cfg)  # додаємо value_template, icon, unit_of_measurement
+
+        mqtt_client.publish(
+            discovery_topic,
+            json.dumps(payload),
+            retain=True,
+        )
+
+        print(f"Published discovery: {discovery_topic}")
 
 def load_param_config_from_env() -> dict:
     """
@@ -72,9 +178,13 @@ def main():
     mqtt_client = mqtt.Client()
     if mqtt_username:
         mqtt_client.username_pw_set(mqtt_username, mqtt_password)
-
-    mqtt_client.connect(mqtt_host, mqtt_port, 60)
-    mqtt_client.loop_start()
+    try:
+        mqtt_client.connect(mqtt_host, mqtt_port, 60)
+        mqtt_client.loop_start()
+        # Publish discovery configs
+        publish_discovery_configs(mqtt_client, mqtt_topic, param_config)
+    except Exception:
+        print("Connection to MQTT failed.")
 
     try:
         client.connect()
