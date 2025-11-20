@@ -38,7 +38,7 @@ SENSOR_HINTS = {
         "device_class": "energy",
         "unit_of_measurement": "kWh",
         "state_class": "measurement",
-        "icon": "mdi:thermometer",
+        "icon": "mdi:meter-electric",
     },
     "r0035": {
         "name": "Motor temperature",
@@ -364,6 +364,39 @@ def main():
 
             # 2) poll data
             base_state = client.read_station_state()
+
+            # Read additional configured parameters
+            extra_raw = client.read_params_batch(param_codes) if param_codes else {}
+
+            extra_parsed = {}
+            for code, meta in extra_raw.items():
+                raw_val = meta.get("value_raw")
+                parser_name = param_config.get(code, "raw")
+                parser_fn = PARSER_REGISTRY.get(parser_name)
+
+                if parser_fn is None:
+                    parsed = raw_val
+                else:
+                    try:
+                        parsed = parser_fn(raw_val)
+                    except Exception as exc:
+                        parsed = {"raw": raw_val, "parse_error": str(exc)}
+                        logger.warning(
+                            "Parsing error for %s with parser %s: %s",
+                            code,
+                            parser_name,
+                            exc,
+                        )
+
+                extra_parsed[code] = {
+                    "raw": raw_val,
+                    "parsed": parsed,
+                    "status": meta.get("status"),
+                    "index": meta.get("index"),
+                }
+
+            # Attach configured params section
+            base_state["params"] = extra_parsed
 
             # 3) publish
             payload = json.dumps(base_state, default=str)
