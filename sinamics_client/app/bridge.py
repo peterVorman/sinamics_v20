@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import time
 import logging
 import paho.mqtt.client as mqtt
@@ -47,6 +48,8 @@ SENSOR_HINTS = {
         "icon": "mdi:thermometer",
     }
 }
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "100"))      # per poll cycle
+BASE_BACKOFF = float(os.getenv("BASE_BACKOFF", "5"))  # seconds
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +292,20 @@ def load_param_config_from_env() -> dict:
     logger.info("Loaded param definitions: %s", list(param_config.keys()))
     return param_config
 
+# ---------------------------------------------------------------------
+# Retry helpers
+# ---------------------------------------------------------------------
+def _retry_sleep(attempt: int, base: float = 1.0, cap: float = 30.0) -> None:
+    """Sleep with exponential back-off.
+
+    Args:
+        attempt: 1-based attempt counter.
+        base:    Base delay in seconds.
+        cap:     Maximum delay in seconds.
+    """
+    delay = min(base * (2 ** (attempt - 1)), cap)
+    logger.warning("Retry attempt %d – sleeping %.1fs …", attempt, delay)
+    time.sleep(delay)
 
 def main():
     """Entrypoint for the add-on bridge: poll device and publish to MQTT."""
@@ -320,7 +337,12 @@ def main():
 
     client = SinamicsV20Client(host, port, "/")
 
-    mqtt_client = mqtt.Client()
+    if hasattr(mqtt, "CallbackAPIVersion"):  # paho-mqtt ≥2.0
+        mqtt_client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2
+        )
+    else:
+        mqtt_client = mqtt.Client()
     if mqtt_username:
         mqtt_client.username_pw_set(mqtt_username, mqtt_password)
     try:
@@ -331,60 +353,52 @@ def main():
     except Exception:
         logger.exception("Connection to MQTT failed.")
 
-    try:
-        client.connect()
-        while True:
-            try:
-                # Read aggregated station state
-                base_state = client.read_station_state()
+    consec_errors = 0  # consecutive polling errors
 
-                # Read additional configured parameters
-                extra_raw = client.read_params_batch(param_codes) if param_codes else {}
+    while True:
+        try:
+            # 1) ensure WebSocket is up
+            if client.sock is None:
+                logger.info("WebSocket not connected – connecting …")
+                client.connect()
 
-                extra_parsed = {}
-                for code, meta in extra_raw.items():
-                    raw_val = meta.get("value_raw")
-                    parser_name = param_config.get(code, "raw")
-                    parser_fn = PARSER_REGISTRY.get(parser_name)
+            # 2) poll data
+            base_state = client.read_station_state()
 
-                    if parser_fn is None:
-                        parsed = raw_val
-                    else:
-                        try:
-                            parsed = parser_fn(raw_val)
-                        except Exception as exc:
-                            parsed = {"raw": raw_val, "parse_error": str(exc)}
-                            logger.warning(
-                                "Parsing error for %s with parser %s: %s",
-                                code,
-                                parser_name,
-                                exc,
-                            )
-
-                    extra_parsed[code] = {
-                        "raw": raw_val,
-                        "parsed": parsed,
-                        "status": meta.get("status"),
-                        "index": meta.get("index"),
-                    }
-
-                # Attach configured params section
-                base_state["params"] = extra_parsed
-
-                payload = json.dumps(base_state, default=str)
+            # 3) publish
+            payload = json.dumps(base_state, default=str)
+            if mqtt_client.is_connected():
                 mqtt_client.publish(mqtt_topic, payload, qos=0, retain=False)
-                logger.debug("Published state to %s", mqtt_topic)
-                time.sleep(poll_interval)
-            except Exception:
-                logger.exception("Error reading/publishing state")
-                time.sleep(poll_interval)
-    except KeyboardInterrupt:
-        logger.info("Stopped by user")
-    finally:
-        client.close()
-        mqtt_client.loop_stop()
-        mqtt_client.disconnect()
-        logger.info("Cleaned up and disconnected")
+                logger.debug("Published state (%d bytes)", len(payload))
+            else:
+                logger.warning("MQTT not connected – skipping publish")
+
+            consec_errors = 0  # success → reset counter
+            time.sleep(poll_interval)
+
+        except (TimeoutError, OSError, RuntimeError, socket.error) as exc:
+            consec_errors += 1
+            logger.error(
+                "Polling error (%d/%d): %s", consec_errors, MAX_RETRIES, exc, exc_info=True
+            )
+            client.close()  # drop dead socket
+            if consec_errors >= MAX_RETRIES:
+                logger.critical("Max retries exceeded – aborting bridge")
+                raise  # s6 will restart the add-on
+            _retry_sleep(consec_errors, base=BASE_BACKOFF)
+
+        except KeyboardInterrupt:
+            raise
+
+        except Exception:
+            # Defensive – keep bridge alive for unexpected cases
+            consec_errors += 1
+            logger.exception("Unhandled error in main loop (%d/%d)", consec_errors, MAX_RETRIES)
+            client.close()
+            if consec_errors >= MAX_RETRIES:
+                logger.critical("Max retries exceeded – aborting bridge")
+                raise
+            _retry_sleep(consec_errors, base=BASE_BACKOFF)
 
 
 if __name__ == "__main__":

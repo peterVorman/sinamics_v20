@@ -186,39 +186,56 @@ class SinamicsV20Client:
 
         return payload.decode("utf-8", errors="replace").strip()
 
+    def _recv_one_matching(self, prefix: str, max_skip: int = 50) -> Optional[str]:
+        """Read frames until one starts with *prefix*; silently skip others."""
+        skipped = 0
+        while skipped < max_skip:
+            frame = self._recv_frame()
+            if frame is None:
+                return None
+            if frame.startswith(prefix):
+                return frame
+            logger.debug("Skip unsolicited frame while waiting for %s: %s", prefix, frame)
+            skipped += 1
+        logger.warning("Max skipped frames exceeded while waiting for %s", prefix)
+        return None
+
+    def _recv_many_matching(
+        self, prefix: str, expected: int, max_skip_per_reply: int = 50
+    ) -> List[str]:
+        """Collect *expected* frames starting with *prefix*."""
+        replies: List[str] = []
+        while len(replies) < expected:
+            frame = self._recv_one_matching(prefix, max_skip=max_skip_per_reply)
+            if frame is None:
+                break
+            replies.append(frame)
+        return replies
+
     # -------------------------------------------------------------------------
     # Generic protocol helpers
     # -------------------------------------------------------------------------
 
-    def send_command(self, cmd: str) -> Optional[str]:
-        """Send a single command (faSum, readPara, queryIdent, ...) and read one reply."""
+    def send_command(self, cmd: str, expect_prefix: str) -> Optional[str]:
+        """Send *cmd* and return the first frame that starts with *expect_prefix*."""
         self._send_frame(cmd)
         logger.debug(">>> %s", cmd)
-        resp = self._recv_frame()
-        if resp is not None:
+        resp = self._recv_one_matching(expect_prefix)
+        if resp:
             logger.debug("<<< %s", resp)
         return resp
 
-    def send_batch(self, cmds: List[str]) -> List[str]:
-        """Send multiple commands in a single frame using '||'.
-
-        Returns:
-            List of replies (one frame per command).
-        """
+    def send_batch(self, cmds: List[str], expect_prefix: str) -> List[str]:
+        """Send a batch and return *only* frames that start with *expect_prefix*."""
         if not cmds:
             return []
-
         payload = "||".join(cmds)
         self._send_frame(payload)
         logger.debug(">>> %s", payload)
 
-        replies = []
-        for _ in cmds:
-            resp = self._recv_frame()
-            if resp is None:
-                break
-            logger.debug("<<< %s", resp)
-            replies.append(resp)
+        replies = self._recv_many_matching(expect_prefix, expected=len(cmds))
+        for r in replies:
+            logger.debug("<<< %s", r)
         return replies
 
     # -------------------------------------------------------------------------
@@ -227,7 +244,7 @@ class SinamicsV20Client:
 
     def query_ident(self) -> Optional[Dict[str, Any]]:
         """queryIdent -> queryIdent,200,<string with model & params>"""
-        resp = self.send_command("queryIdent")
+        resp = self.send_command("queryIdent", expect_prefix="queryIdent,")
         if resp is None:
             return None
 
@@ -253,7 +270,7 @@ class SinamicsV20Client:
 
     def report_status(self) -> Optional[Dict[str, Any]]:
         """reportStatus -> reportStatus,200,0,en00000000013338,4"""
-        resp = self.send_command("reportStatus")
+        resp = self.send_command("reportStatus", expect_prefix="reportStatus,")
         if resp is None:
             return None
 
@@ -276,7 +293,7 @@ class SinamicsV20Client:
 
     def fa_sum(self) -> Optional[Dict[str, Any]]:
         """faSum -> faSum,200,0,0,4 (aggregated faults/warnings)."""
-        resp = self.send_command("faSum")
+        resp = self.send_command("faSum", expect_prefix="faSum,")
         if resp is None:
             return None
 
@@ -320,7 +337,7 @@ class SinamicsV20Client:
             Dict with status, name, index and raw value when successful, otherwise None.
         """
         cmd = f"readPara,11,{name},{index},{length}"
-        resp = self.send_command(cmd)
+        resp = self.send_command(cmd, expect_prefix="readPara,")
         if resp is None:
             return None
 
@@ -358,8 +375,7 @@ class SinamicsV20Client:
             return {}
 
         cmds = [f"readPara,11,{n},{index},{length}" for n in names]
-        replies = self.send_batch(cmds)
-
+        replies = self.send_batch(cmds, expect_prefix="readPara,")
         results: Dict[str, Dict[str, Any]] = {}
         for resp in replies:
             parts = resp.split(",")
