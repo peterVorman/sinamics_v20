@@ -46,7 +46,21 @@ SENSOR_HINTS = {
         "unit_of_measurement": "°C",
         "state_class": "measurement",
         "icon": "mdi:thermometer",
-    }
+    },
+    "r0754": {
+        "component": "sensor",
+        "name": "Analog input value",
+        "unit_of_measurement": "%",
+        "state_class": "measurement",
+        "icon": "mdi:chart-line",
+    },
+    "r0027": {
+        "component": "sensor",
+        "name": "Output current",
+        "unit_of_measurement": "A",
+        "state_class": "measurement",
+        "icon": "mdi:chart-line",
+    },
 }
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "100"))      # per poll cycle
 BASE_BACKOFF = float(os.getenv("BASE_BACKOFF", "5"))  # seconds
