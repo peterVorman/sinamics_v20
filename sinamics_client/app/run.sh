@@ -10,7 +10,9 @@ MQTT_PASSWORD=$(bashio::config 'mqtt_password')
 MQTT_TOPIC=$(bashio::config 'mqtt_topic')
 POLL_INTERVAL=$(bashio::config 'poll_interval')
 PARAM_DEFS=$(bashio::config 'param_definitions')
+LOG_LEVEL=$(bashio::config 'log_level')
 
+export LOG_LEVEL="$LOG_LEVEL"
 export PARAM_DEFS="$PARAM_DEFS"
 export SINAMICS_HOST="$HOST"
 export SINAMICS_PORT="$PORT"

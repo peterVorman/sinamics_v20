@@ -218,6 +218,7 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config):
         mqtt_client.publish(discovery_topic, json.dumps(payload), retain=True)
         logger.info("Published discovery: %s", discovery_topic)
 
+
 def _normalize_param_items(items) -> dict:
     """Normalize iterable of 'CODE[:PARSER]' strings into dict.
 
@@ -286,6 +287,7 @@ def _parse_param_defs_string(raw: str) -> dict:
 
     return _normalize_param_items(items)
 
+
 def load_param_config_from_env() -> dict:
     """Read and parse PARAM_DEFS from environment only.
 
@@ -306,10 +308,11 @@ def load_param_config_from_env() -> dict:
     logger.info("Loaded param definitions: %s", list(param_config.keys()))
     return param_config
 
+
 # ---------------------------------------------------------------------
 # Retry helpers
 # ---------------------------------------------------------------------
-def _retry_sleep(attempt: int, base: float = 1.0, cap: float = 30.0) -> None:
+def _retry_sleep(attempt: int, base: float = 1.0, cap: float = 60.0) -> None:
     """Sleep with exponential back-off.
 
     Args:
@@ -320,6 +323,7 @@ def _retry_sleep(attempt: int, base: float = 1.0, cap: float = 30.0) -> None:
     delay = min(base * (2 ** (attempt - 1)), cap)
     logger.warning("Retry attempt %d – sleeping %.1fs …", attempt, delay)
     time.sleep(delay)
+
 
 def main():
     """Entrypoint for the add-on bridge: poll device and publish to MQTT."""
