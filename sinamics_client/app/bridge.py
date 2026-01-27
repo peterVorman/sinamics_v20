@@ -12,7 +12,7 @@ from sinamics_client import (
     parse_r4000_mpc_status,
 )
 
-# Available parsers registry, configurable via add-on options/env
+# Available parsers registry
 PARSER_REGISTRY = {
     "dds_float": parse_dds_float,
     "r0052_status": parse_r0052,
@@ -23,7 +23,6 @@ PARSER_REGISTRY = {
 }
 
 # Discovery hints to enrich sensors with HA metadata.
-# 'bitmask' field defines bits to expand into binary_sensors.
 SENSOR_HINTS = {
     # --- Power & Energy ---
     "r0032": {
@@ -105,7 +104,7 @@ SENSOR_HINTS = {
             8: "Deviation set/act",
             9: "PZD control",
             10: "f_max reached",
-            11: "V/I Limit Active", # Important!
+            11: "V/I Limit Active",
             12: "Motor holding brake",
             13: "Motor overload",
             14: "Motor Direction Right",
@@ -173,21 +172,20 @@ SENSOR_HINTS = {
         "bitmask": {
             0: "Vdc-max controller inactive",
             1: "Vdc-max controller active",
-            # Note: r1204 bits can vary by firmware, basic check
         }
     },
     "r1348": {
-        "name": "Status I-max Controller", # Important for your case!
+        "name": "Status I-max Controller",
         "icon": "mdi:current-ac",
         "bitmask": {
-            0: "I-max controller output active", # Means current limiting is happening!
+            0: "I-max controller output active",
         }
     },
     "r2399": {
         "name": "Status Energy Saving",
         "icon": "mdi:leaf",
         "bitmask": {
-            0: "Energy saving active", # Hibernation/Sleep
+            0: "Energy saving active",
             1: "Energy saving controller active",
         }
     }
@@ -311,16 +309,15 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config, availabilit
             "value_template": "{{ value_json.multi_pump.running_motors | join(',') }}",
             "icon": "mdi:pump",
         },
+        # FIX: Value template is now a valid Python string
         "sinamics_pump_efficiency": {
             "component": "sensor",
             "name": "Pump Efficiency Factor",
-            "value_template": >-
-                {% if value_json.params.r0032 is defined and value_json.frequency.actual_filtered_hz | float(0) > 10 %}
-                  {{ (value_json.params.r0032.parsed | float(0) * 1000 / (value_json.frequency.actual_filtered_hz | float(1))) | round(1) }}
-                {% else %}
-                  0
-                {% endif %}
-            ,
+            "value_template": (
+                "{% if value_json.params.r0032 is defined and value_json.frequency.actual_filtered_hz | float(0) > 10 %}"
+                "{{ (value_json.params.r0032.parsed | float(0) * 1000 / (value_json.frequency.actual_filtered_hz | float(1))) | round(1) }}"
+                "{% else %}0{% endif %}"
+            ),
             "unit_of_measurement": "W/Hz",
             "icon": "mdi:chart-bell-curve-cumulative",
         }
