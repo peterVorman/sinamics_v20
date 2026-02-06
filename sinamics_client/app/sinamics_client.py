@@ -389,6 +389,14 @@ class SinamicsV20Client:
             except ValueError:
                 logger.warning("Invalid status/index in batch readPara: %s", parts)
                 continue
+            name = parts[2]
+            results[name] = {
+                "status": status,
+                "index": idx,
+                "value_raw": parts[4],
+            }
+        return results
+        
     def write_param(self, name: str, value: Any, index: int = -1) -> Optional[Dict[str, Any]]:
         """Write a single parameter via the ``writePara`` command.
 
@@ -425,15 +433,6 @@ class SinamicsV20Client:
             "index": idx,
             "result": result,
         }
-
-
-            name = parts[2]
-            results[name] = {
-                "status": status,
-                "index": idx,
-                "value_raw": parts[4],
-            }
-        return results
 
     # -------------------------------------------------------------------------
     # Monitoring loop
