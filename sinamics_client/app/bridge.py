@@ -3,6 +3,8 @@ import os
 import socket
 import time
 import logging
+import threading
+
 import paho.mqtt.client as mqtt
 
 from sinamics_client import (
@@ -443,6 +445,59 @@ def main():
     mqtt_password = os.getenv("MQTT_PASSWORD", "")
     mqtt_topic = os.getenv("MQTT_TOPIC", "sinamics_v20/pump_station/state")
     poll_interval = float(os.getenv("POLL_INTERVAL", "5"))
+        # Determine command topic for write commands
+    cmd_topic_env = os.getenv("MQTT_CMD_TOPIC", "")
+    if cmd_topic_env:
+        cmd_topic = cmd_topic_env
+    elif mqtt_topic.endswith("/state"):
+        cmd_topic = mqtt_topic.replace("/state", "/cmd")
+    else:
+        cmd_topic = f"{mqtt_topic}/cmd"
+
+    # Lock to ensure that only one thread interacts with the drive client at a time
+    client_lock = threading.Lock()
+
+    def on_mqtt_message(client_mqtt, userdata, msg):
+        """Handle incoming MQTT command messages for setting drive parameters."""
+        topic = msg.topic
+        try:
+            payload_str = msg.payload.decode().strip()
+        except Exception:
+            payload_str = str(msg.payload)
+        # Remove the cmd topic prefix and extract param and index
+        subtopic = topic[len(cmd_topic):].lstrip("/")
+        parts = subtopic.split("/")
+        param_name = parts[0] if parts else ""
+        # Try to parse index if provided
+        try:
+            index = int(parts[1]) if len(parts) > 1 else -1
+        except ValueError:
+            index = -1
+        # Parse the payload into int, float or leave as string
+        try:
+            if "." in payload_str:
+                value = float(payload_str)
+            else:
+                value = int(payload_str)
+        except ValueError:
+            value = payload_str
+        logger.info("MQTT command: writing %s index=%s value=%s", param_name, index, value)
+        # Acquire lock and write the parameter
+        with client_lock:
+            try:
+                result = client.write_param(param_name, value, index)
+                status_ok = bool(result and result.get("status", 0) >= 200)
+            except Exception:
+                logger.exception("Error processing MQTT write command")
+                status_ok = False
+        # Publish a simple result (ok/error) to a result topic
+        response_topic = f"{cmd_topic}/result/{param_name}"
+        result_msg = "ok" if status_ok else "error"
+        try:
+            client_mqtt.publish(response_topic, result_msg, qos=0, retain=False)
+        except Exception:
+            logger.warning("Failed to publish command result")
+
 
     if mqtt_topic.endswith("/state"):
         availability_topic = mqtt_topic.replace("/state", "/availability")
@@ -467,6 +522,9 @@ def main():
         mqtt_client.loop_start()
         mqtt_client.publish(availability_topic, "online", retain=True)
         publish_discovery_configs(mqtt_client, mqtt_topic, param_config, availability_topic)
+                # Subscribe to command topics and set handler for incoming writes
+        mqtt_client.on_message = on_mqtt_message
+        mqtt_client.subscribe(f"{cmd_topic}/#")
     except Exception:
         logger.exception("Connection to MQTT failed.")
 
