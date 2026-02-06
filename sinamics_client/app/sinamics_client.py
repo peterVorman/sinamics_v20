@@ -389,6 +389,43 @@ class SinamicsV20Client:
             except ValueError:
                 logger.warning("Invalid status/index in batch readPara: %s", parts)
                 continue
+    def write_param(self, name: str, value: Any, index: int = -1) -> Optional[Dict[str, Any]]:
+        """Write a single parameter via the ``writePara`` command.
+
+        Sends a writePara request and parses the response.  The command format
+        was inferred from the existing readPara implementation; adjust if Siemens publishes an official spec.
+
+        Args:
+            name: Parameter name, e.g. 'P0010'.
+            value: Value to write; numeric types will be converted to string.
+            index: Parameter index, default -1.
+
+        Returns:
+            Dict with status, name, index and result code, or None if no response.
+        """
+        val_str = str(value)
+        cmd = f"writePara,11,{name},{index},{val_str}"
+        resp = self.send_command(cmd, expect_prefix="writePara,")
+        if resp is None:
+            return None
+        parts = resp.split(",")
+        if len(parts) < 4 or parts[0] != "writePara":
+            logger.warning("Unexpected writePara response: %s", resp)
+            return None
+        try:
+            status = int(parts[1])
+            idx = int(parts[3])
+        except ValueError:
+            logger.warning("Invalid status/index in writePara: %s", parts)
+            return None
+        result = parts[4] if len(parts) > 4 else None
+        return {
+            "status": status,
+            "name": parts[2],
+            "index": idx,
+            "result": result,
+        }
+
 
             name = parts[2]
             results[name] = {
