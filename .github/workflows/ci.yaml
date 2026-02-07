@@ -19,5 +19,3 @@ permissions:
 jobs:
   workflows:
     uses: hassio-addons/workflows/.github/workflows/addon-ci.yaml@main
-    with:
-       prettier_options: --check **/*.{json,js,md,yaml} --write
