@@ -10,6 +10,8 @@ on:
       - reopened
       - synchronize
   workflow_dispatch:
+permissions:
+  security-events: write
 
 jobs:
   workflows:
