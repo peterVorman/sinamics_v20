@@ -559,6 +559,12 @@ def main():
             consec_errors += 1
             logger.error("Polling error (%d/%d): %s", consec_errors, MAX_RETRIES, exc)
             client.close()
+                        # Publish unavailable state to MQTT topic
+            try:
+                if mqtt_client.is_connected():
+                    mqtt_client.publish(mqtt_topic, "unavailable", qos=0, retain=False)
+            except Exception:
+                logger.warning("Failed to publish unavailable state")
             if consec_errors >= MAX_RETRIES:
                 try: mqtt_client.publish(availability_topic, "offline", retain=True)
                 except: pass
@@ -568,6 +574,12 @@ def main():
             consec_errors += 1
             logger.exception("Unhandled error")
             client.close()
+                        # Publish unavailable state to MQTT topic
+            try:
+                if mqtt_client.is_connected():
+                    mqtt_client.publish(mqtt_topic, "unavailable", qos=0, retain=False)
+            except Exception:
+                logger.warning("Failed to publish unavailable state")
             if consec_errors >= MAX_RETRIES: raise
             _retry_sleep(consec_errors, base=BASE_BACKOFF)
 
