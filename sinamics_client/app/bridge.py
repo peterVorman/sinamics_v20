@@ -3,9 +3,9 @@ import os
 import socket
 import time
 import logging
-import threading
 
 import paho.mqtt.client as mqtt
+import threading
 
 from sinamics_client import (
     SinamicsV20Client,
@@ -13,6 +13,7 @@ from sinamics_client import (
     parse_dds_float,
     parse_r4000_mpc_status,
 )
+
 
 # Available parsers registry
 PARSER_REGISTRY = {
@@ -559,6 +560,12 @@ def main():
             consec_errors += 1
             logger.error("Polling error (%d/%d): %s", consec_errors, MAX_RETRIES, exc)
             client.close()
+                        # Publish unavailable state to MQTT topic
+            try:
+                if mqtt_client.is_connected():
+                    mqtt_client.publish(mqtt_topic, "unavailable", qos=0, retain=False)
+            except Exception:
+                logger.warning("Failed to publish unavailable state")
             if consec_errors >= MAX_RETRIES:
                 try: mqtt_client.publish(availability_topic, "offline", retain=True)
                 except: pass
@@ -568,8 +575,15 @@ def main():
             consec_errors += 1
             logger.exception("Unhandled error")
             client.close()
+                        # Publish unavailable state to MQTT topic
+            try:
+                if mqtt_client.is_connected():
+                    mqtt_client.publish(mqtt_topic, "unavailable", qos=0, retain=False)
+            except Exception:
+                logger.warning("Failed to publish unavailable state")
             if consec_errors >= MAX_RETRIES: raise
             _retry_sleep(consec_errors, base=BASE_BACKOFF)
 
 if __name__ == "__main__":
     main()
+
