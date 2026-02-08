@@ -1,12 +1,14 @@
 import json
+
 import os
 import socket
 
 import time
 import logging
-import threading
+impor
 
  import paho.mqtt.client as mqtt
+
 
 from sinamics_client import (
     SinamicsV20Client,
@@ -586,3 +588,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
