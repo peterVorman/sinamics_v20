@@ -1,11 +1,12 @@
 import json
 import os
 import socket
+
 import time
 import logging
 import threading
 
-import paho.mqtt.client as mqtt
+ import paho.mqtt.client as mqtt
 
 from sinamics_client import (
     SinamicsV20Client,
