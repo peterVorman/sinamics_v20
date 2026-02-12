@@ -36,6 +36,8 @@ class SinamicsV20Client:
             "r4027": parse_dds_float,  # Multi-pump abs. operating hours: motor 2 [h]
             "r2273": parse_dds_float,  # PID error
             "P4013": parse_dds_float,  # Multi-pump control motor number configuration
+         "P2372": parse_dds_float,  # Motor staging cycling
+        "P2371": parse_dds_float,  # Motor staging cycling
             "P2372": parse_dds_float,  # Motor staging cycling
                 "P2378": parse_dds_float,  # Motor staging frequency [%]
 
