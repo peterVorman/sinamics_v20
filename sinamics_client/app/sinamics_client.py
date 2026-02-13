@@ -488,7 +488,6 @@ class SinamicsV20Client:
             "r4026",   # Operating hours motor 1 [h]
             "r4027",   # Operating hours motor 2 [h]
             "P2378",   # Motor staging frequency [%]
-
         ]
 
         raw_params = self.read_params_batch(param_names)
@@ -529,11 +528,11 @@ class SinamicsV20Client:
         # Frequency limits
         f_min = safe_parse("P1080", raw_params.get("P1080", {}).get("value_raw"))
         f_max = safe_parse("P1082", raw_params.get("P1082", {}).get("value_raw"))
-                staging_pct = safe_parse("P2378", raw_params.get("P2378", {}).get("value_raw"))
+        staging_pct = safe_parse("P2378", raw_params.get("P2378", {}).get("value_raw"))
+        
         # Derived values from percentages
         hib_hz = pid_hib * f_max / 100 if (isinstance(pid_hib, (int, float)) and isinstance(f_max, (int, float))) else None
         staging_hz = staging_pct * f_max / 100 if (isinstance(staging_pct, (int, float)) and isinstance(f_max, (int, float))) else None
-
 
         # Motor operating hours
         h_m1 = safe_parse("r4026", raw_params.get("r4026", {}).get("value_raw"))
@@ -700,7 +699,6 @@ def parse_r4000_mpc_status(status_word) -> dict:
     return {
         "raw": status_word,
         "bits": {i: bit(i) for i in range(16)},
-
         "on_off1": on_off1,
         "motor1_on": m1_on,
         "motor2_on": m2_on,
