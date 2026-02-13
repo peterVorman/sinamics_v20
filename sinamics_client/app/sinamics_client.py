@@ -36,11 +36,10 @@ class SinamicsV20Client:
             "r4027": parse_dds_float,  # Multi-pump abs. operating hours: motor 2 [h]
             "r2273": parse_dds_float,  # PID error
             "P4013": parse_dds_float,  # Multi-pump control motor number configuration
-         "P2372": parse_dds_float,  # Motor staging cycling
-        "P2371": parse_dds_float,  # Motor staging cycling
             "P2372": parse_dds_float,  # Motor staging cycling
-                "P2378": parse_dds_float,  # Motor staging frequency [%]
-
+            "P2371": parse_dds_float,  # Motor staging cycling
+            "P2372": parse_dds_float,  # Motor staging cycling
+            "P2378": parse_dds_float,  # Motor staging frequency [%]
             "P2371": parse_dds_float,  # Motor staging cycling
             "r4000": parse_r4000_mpc_status,
         }
@@ -478,8 +477,6 @@ class SinamicsV20Client:
             "r0052",   # Active status word 1
             "r4000",   # Multi-pump control status word
             "r0020",   # Frequency setpoint before RFG [Hz]
-                    
-
             "r0021",   # Actual filtered frequency [Hz]
             "r2260",   # PID setpoint after PID-RFG
             "r2294",   # Act. PID output
@@ -490,7 +487,7 @@ class SinamicsV20Client:
             "r0072",   # Actual output voltage [V]
             "r4026",   # Operating hours motor 1 [h]
             "r4027",   # Operating hours motor 2 [h]
-                    "P2378",   # Motor staging frequency [%]
+            "P2378",   # Motor staging frequency [%]
 
         ]
 
@@ -590,17 +587,10 @@ class SinamicsV20Client:
                             mpc_status.get("motor2_on"),
                             mpc_status.get("motor3_on"),
                             mpc_status.get("motor4_on"),
-                        ],
-                        start=1,
-                    ) if flag
-                           
-             
-                            "staging_frequency_pct": staging_pct,
-            "staging_frequency_hz": staging_hz,
-},
-
-                           
-            },
+                        ], start=1,) if flag]
+                "staging_frequency_pct": staging_pct,
+                "staging_frequency_hz": staging_hz,
+            },        
             "frequency": {
                 "setpoint_before_rfg_hz": freq_set_before,
                 "actual_filtered_hz": freq_actual,
@@ -613,8 +603,7 @@ class SinamicsV20Client:
                 "output": pid_out,
                 "error": pid_err,
                 "hibernation_setpoint_pct": pid_hib,
-                            "hibernation_setpoint_hz": hib_hz,
-
+                "hibernation_setpoint_hz": hib_hz,
             },
             "operating_hours": {
                 "motor1_h": h_m1,
