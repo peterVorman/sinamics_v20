@@ -306,6 +306,28 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config, availabilit
             "unit_of_measurement": "%",
             "icon": "mdi:chart-line",
         },
+        "sinamics_pump_pid_hibernation_setpoint_hz": {
+            "component": "sensor",
+            "name": "PID hibernation setpoint (Hz)",
+            "value_template": "{{ value_json.pid.hibernation_setpoint_hz }}",
+            "unit_of_measurement": "Hz",
+            "icon": "mdi:chart-line",
+        },
+        "sinamics_pump_staging_frequency_pct": {
+            "component": "sensor",
+            "name": "Staging frequency",
+            "value_template": "{{ value_json.multi_pump.staging_frequency_pct }}",
+            "unit_of_measurement": "%",
+            "icon": "mdi:chart-bell-curve-cumulative",
+        },
+        "sinamics_pump_staging_frequency_hz": {
+            "component": "sensor",
+            "name": "Staging frequency",
+            "value_template": "{{ value_json.multi_pump.staging_frequency_hz }}",
+            "unit_of_measurement": "Hz",
+            "icon": "mdi:chart-bell-curve-cumulative",
+        },
+
         "sinamics_pump_running_motors": {
             "component": "sensor",
             "name": "Pump Running Motors",
