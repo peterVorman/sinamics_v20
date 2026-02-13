@@ -579,14 +579,11 @@ class SinamicsV20Client:
             },
             "multi_pump": {
                 "status": mpc_status,
-                "running_motors": [
-                    i for i, flag in enumerate(
-                        [
-                            mpc_status.get("motor1_on"),
-                            mpc_status.get("motor2_on"),
-                            mpc_status.get("motor3_on"),
-                            mpc_status.get("motor4_on"),
-                        ], start=1,) if flag]
+                "running_motors": [i for i, flag in enumerate([
+                    mpc_status.get("motor1_on"),
+                    mpc_status.get("motor2_on"),
+                    mpc_status.get("motor3_on"),
+                    mpc_status.get("motor4_on"),], start=1,) if flag],
                 "staging_frequency_pct": staging_pct,
                 "staging_frequency_hz": staging_hz,
             },        
