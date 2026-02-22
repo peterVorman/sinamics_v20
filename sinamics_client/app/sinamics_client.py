@@ -1,5 +1,6 @@
 import socket
 import base64
+import hashlib
 import os
 import struct
 import time
@@ -8,6 +9,7 @@ from pprint import pformat
 from typing import Dict, List, Optional, Callable, Any
 
 logger = logging.getLogger(__name__)
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
 class SinamicsV20Client:
@@ -18,6 +20,7 @@ class SinamicsV20Client:
         self.port = port
         self.path = path
         self.sock: Optional[socket.socket] = None
+        self._recv_buffer = bytearray()
         # Built-in parsers. Can be extended externally if needed.
         self.parsers = {
             "r0052": parse_r0052,
@@ -38,9 +41,7 @@ class SinamicsV20Client:
             "P4013": parse_dds_float,  # Multi-pump control motor number configuration
             "P2372": parse_dds_float,  # Motor staging cycling
             "P2371": parse_dds_float,  # Motor staging cycling
-            "P2372": parse_dds_float,  # Motor staging cycling
             "P2378": parse_dds_float,  # Motor staging frequency [%]
-            "P2371": parse_dds_float,  # Motor staging cycling
             "r4000": parse_r4000_mpc_status,
         }
 
@@ -48,29 +49,37 @@ class SinamicsV20Client:
     # Low-level WebSocket
     # -------------------------------------------------------------------------
 
-    def connect(self, timeout: float = 5.0):
+    def connect(self, timeout: float = 5.0, read_timeout: Optional[float] = None):
         """Open TCP + WebSocket handshake (without verifying Sec-WebSocket-Accept).
 
         Args:
             timeout: Socket connection timeout in seconds.
         """
-        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        key_bytes = os.urandom(16)
+        key = base64.b64encode(key_bytes).decode("ascii")
+        expected_accept = base64.b64encode(
+            hashlib.sha1((key + WS_GUID).encode("ascii")).digest()
+        ).decode("ascii")
+        origin = f"http://{self.host}"
 
         request_lines = [
             f"GET {self.path} HTTP/1.1",
-            f"Host: {self.host}",
+            f"Host: {self.host}:{self.port}",
             "Upgrade: websocket",
             "Connection: Upgrade",
             f"Sec-WebSocket-Key: {key}",
             "Sec-WebSocket-Version: 13",
-            "Origin: http://192.168.1.1",
+            f"Origin: {origin}",
             "",
             "",
         ]
         request = "\r\n".join(request_lines).encode("ascii")
 
+        self.close()
         self.sock = socket.create_connection((self.host, self.port), timeout=timeout)
+        self.sock.settimeout(timeout)
         self.sock.sendall(request)
+        self._recv_buffer.clear()
 
         # Read HTTP headers until \r\n\r\n
         response = b""
@@ -79,16 +88,46 @@ class SinamicsV20Client:
             if not chunk:
                 raise RuntimeError("Connection closed during handshake")
             response += chunk
+            if len(response) > 65536:
+                raise RuntimeError("Handshake header too large")
 
         try:
-            header = response.split(b"\r\n\r\n", 1)[0].decode("ascii", errors="replace")
+            header_bytes, remainder = response.split(b"\r\n\r\n", 1)
+            header = header_bytes.decode("ascii", errors="replace")
         except Exception:
             header = "<failed to decode header>"
+            remainder = b""
         logger.debug("Handshake response header:\n%s", header)
+
+        status_line = ""
+        headers = {}
+        if header != "<failed to decode header>":
+            lines = header.split("\r\n")
+            if lines:
+                status_line = lines[0]
+            for line in lines[1:]:
+                if ":" not in line:
+                    continue
+                key_name, value = line.split(":", 1)
+                headers[key_name.strip().lower()] = value.strip()
+
+        if " 101 " not in f" {status_line} " and not status_line.endswith(" 101"):
+            raise RuntimeError(f"Invalid WebSocket handshake status: {status_line or '<missing>'}")
+        if headers.get("upgrade", "").lower() != "websocket":
+            raise RuntimeError(f"Invalid WebSocket Upgrade header: {headers.get('upgrade')!r}")
+        if "upgrade" not in headers.get("connection", "").lower():
+            raise RuntimeError(f"Invalid WebSocket Connection header: {headers.get('connection')!r}")
+        if headers.get("sec-websocket-accept") != expected_accept:
+            raise RuntimeError("Invalid Sec-WebSocket-Accept in handshake response")
+
+        self._recv_buffer.extend(remainder)
+        effective_read_timeout = timeout if read_timeout is None else read_timeout
+        self.sock.settimeout(effective_read_timeout)
         logger.info("WebSocket connected (Sinamics V20 Smart Access)")
 
     def close(self):
         """Close underlying socket."""
+        self._recv_buffer.clear()
         if self.sock:
             try:
                 self.sock.close()
@@ -99,16 +138,23 @@ class SinamicsV20Client:
         if not self.sock:
             raise RuntimeError("Socket is not connected. Call connect() first.")
 
-    def _send_frame(self, text: str):
-        """Send a WebSocket text frame.
-
-        Note:
-            Many embedded devices prefer line endings; append newline.
-        """
+    def _recv_exact(self, nbytes: int) -> Optional[bytes]:
+        """Read exactly ``nbytes`` from the socket (using the internal buffer)."""
         self._ensure_sock()
-        payload = (text + "\n").encode("utf-8")
+        while len(self._recv_buffer) < nbytes:
+            chunk = self.sock.recv(max(4096, nbytes - len(self._recv_buffer)))
+            if not chunk:
+                return None
+            self._recv_buffer.extend(chunk)
+        out = bytes(self._recv_buffer[:nbytes])
+        del self._recv_buffer[:nbytes]
+        return out
 
-        b1 = 0x80 | 0x1  # FIN + text opcode
+    def _send_raw_frame(self, opcode: int, payload: bytes):
+        """Send a client WebSocket frame with masking."""
+        self._ensure_sock()
+
+        b1 = 0x80 | (opcode & 0x0F)  # FIN + opcode
         mask_bit = 0x80
         length = len(payload)
 
@@ -127,8 +173,23 @@ class SinamicsV20Client:
         header.extend(mask)
 
         masked_payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-
         self.sock.sendall(header + masked_payload)
+
+    def _send_frame(self, text: str):
+        """Send a WebSocket text frame.
+
+        Note:
+            Many embedded devices prefer line endings; append newline.
+        """
+        payload = (text + "\n").encode("utf-8")
+        self._send_raw_frame(0x1, payload)
+
+    def _send_pong(self, payload: bytes = b""):
+        """Reply to a WebSocket ping."""
+        try:
+            self._send_raw_frame(0xA, payload)
+        except Exception as exc:
+            logger.debug("Failed to send pong frame: %s", exc)
 
     def _recv_frame(self) -> Optional[str]:
         """Receive one WebSocket text frame.
@@ -139,55 +200,66 @@ class SinamicsV20Client:
         """
         self._ensure_sock()
 
-        first_two = self.sock.recv(2)
-        if not first_two:
-            logger.warning("Server closed the connection (no frame header)")
-            return None
-        if len(first_two) < 2:
-            logger.warning("Connection closed while reading frame header")
-            return None
-
-        b1, b2 = first_two
-        opcode = b1 & 0x0F
-        masked = (b2 & 0x80) != 0
-        length = b2 & 0x7F
-
-        if opcode == 0x8:  # close frame
-            logger.info("Received WebSocket close frame")
-            return None
-
-        if length == 126:
-            ext = self.sock.recv(2)
-            if len(ext) < 2:
-                logger.warning("Connection closed while reading extended length (16-bit)")
+        while True:
+            first_two = self._recv_exact(2)
+            if not first_two:
+                logger.warning("Server closed the connection (no frame header)")
                 return None
-            (length,) = struct.unpack("!H", ext)
-        elif length == 127:
-            ext = self.sock.recv(8)
-            if len(ext) < 8:
-                logger.warning("Connection closed while reading extended length (64-bit)")
-                return None
-            (length,) = struct.unpack("!Q", ext)
-
-        mask = b""
-        if masked:
-            mask = self.sock.recv(4)
-            if len(mask) < 4:
-                logger.warning("Connection closed while reading mask")
+            if len(first_two) < 2:
+                logger.warning("Connection closed while reading frame header")
                 return None
 
-        payload = b""
-        while len(payload) < length:
-            chunk = self.sock.recv(length - len(payload))
-            if not chunk:
+            b1, b2 = first_two
+            fin = (b1 & 0x80) != 0
+            opcode = b1 & 0x0F
+            masked = (b2 & 0x80) != 0
+            length = b2 & 0x7F
+
+            if length == 126:
+                ext = self._recv_exact(2)
+                if not ext or len(ext) < 2:
+                    logger.warning("Connection closed while reading extended length (16-bit)")
+                    return None
+                (length,) = struct.unpack("!H", ext)
+            elif length == 127:
+                ext = self._recv_exact(8)
+                if not ext or len(ext) < 8:
+                    logger.warning("Connection closed while reading extended length (64-bit)")
+                    return None
+                (length,) = struct.unpack("!Q", ext)
+
+            mask = b""
+            if masked:
+                mask = self._recv_exact(4)
+                if not mask or len(mask) < 4:
+                    logger.warning("Connection closed while reading mask")
+                    return None
+
+            payload = self._recv_exact(length) if length else b""
+            if payload is None:
                 logger.warning("Connection closed mid-frame")
                 return None
-            payload += chunk
 
-        if masked:
-            payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            if masked:
+                payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
 
-        return payload.decode("utf-8", errors="replace").strip()
+            if opcode == 0x8:  # close frame
+                logger.info("Received WebSocket close frame")
+                return None
+            if opcode == 0x9:  # ping
+                logger.debug("Received WebSocket ping; replying with pong")
+                self._send_pong(payload)
+                continue
+            if opcode == 0xA:  # pong
+                logger.debug("Received WebSocket pong")
+                continue
+            if opcode != 0x1:
+                logger.debug("Ignoring unsupported WebSocket opcode=0x%x (fin=%s)", opcode, fin)
+                continue
+            if not fin:
+                logger.warning("Received fragmented text frame; continuing with partial payload")
+
+            return payload.decode("utf-8", errors="replace").strip()
 
     def _recv_one_matching(self, prefix: str, max_skip: int = 50) -> Optional[str]:
         """Read frames until one starts with *prefix*; silently skip others."""
@@ -237,6 +309,13 @@ class SinamicsV20Client:
         logger.debug(">>> %s", payload)
 
         replies = self._recv_many_matching(expect_prefix, expected=len(cmds))
+        if len(replies) != len(cmds):
+            logger.warning(
+                "Batch response count mismatch for %s: expected=%d got=%d",
+                expect_prefix,
+                len(cmds),
+                len(replies),
+            )
         for r in replies:
             logger.debug("<<< %s", r)
         return replies
@@ -363,7 +442,13 @@ class SinamicsV20Client:
             "value_raw": parts[4],
         }
 
-    def read_params_batch(self, names: List[str], index: int = -1, length: int = 4) -> Dict[str, Dict[str, Any]]:
+    def read_params_batch(
+        self,
+        names: List[str],
+        index: int = -1,
+        length: int = 4,
+        strict_count: bool = True,
+    ) -> Dict[str, Dict[str, Any]]:
         """Read multiple parameters using a single batch (||-joined) request.
 
         Args:
@@ -379,6 +464,10 @@ class SinamicsV20Client:
 
         cmds = [f"readPara,11,{n},{index},{length}" for n in names]
         replies = self.send_batch(cmds, expect_prefix="readPara,")
+        if strict_count and len(replies) != len(names):
+            raise RuntimeError(
+                f"Incomplete batch response: expected {len(names)} replies, got {len(replies)}"
+            )
         results: Dict[str, Dict[str, Any]] = {}
         for resp in replies:
             parts = resp.split(",")
@@ -398,6 +487,37 @@ class SinamicsV20Client:
                 "index": idx,
                 "value_raw": parts[4],
             }
+        if strict_count:
+            missing = [name for name in names if name not in results]
+            if missing:
+                raise RuntimeError(
+                    f"Incomplete batch response: missing values for {', '.join(missing)}"
+                )
+        return results
+
+    def read_params_chunked(
+        self,
+        names: List[str],
+        index: int = -1,
+        length: int = 4,
+        batch_size: Optional[int] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Read parameters in smaller batches to reduce load on the device."""
+        if not names:
+            return {}
+        if not batch_size or batch_size <= 0 or batch_size >= len(names):
+            return self.read_params_batch(names, index=index, length=length, strict_count=True)
+
+        results: Dict[str, Dict[str, Any]] = {}
+        for start in range(0, len(names), batch_size):
+            chunk = names[start : start + batch_size]
+            chunk_results = self.read_params_batch(
+                chunk,
+                index=index,
+                length=length,
+                strict_count=True,
+            )
+            results.update(chunk_results)
         return results
         
     def write_param(self, name: str, value: Any, index: int = -1) -> Optional[Dict[str, Any]]:
@@ -470,7 +590,7 @@ class SinamicsV20Client:
         except KeyboardInterrupt:
             logger.info("Monitoring stopped by user.")
 
-    def read_station_state(self) -> Dict[str, Any]:
+    def read_station_state(self, batch_size: Optional[int] = None) -> Dict[str, Any]:
         """Read key parameters and return an aggregated station state."""
         # Parameters to read in one batch
         param_names = [
@@ -490,7 +610,7 @@ class SinamicsV20Client:
             "P2378",   # Motor staging frequency [%]
         ]
 
-        raw_params = self.read_params_batch(param_names)
+        raw_params = self.read_params_chunked(param_names, batch_size=batch_size)
 
         # Retrieve faSum/reportStatus separately
         rep = self.report_status()

@@ -17,7 +17,13 @@ options:
   mqtt_username: mqtt_user
   mqtt_password: mqtt_pass
   mqtt_topic: "sinamics_v20/pump_station/state"
+  mqtt_cmd_topic: ""
   poll_interval: 10
+  connect_timeout: 5
+  read_timeout: 15
+  core_batch_size: 7
+  extra_batch_size: 6
+  extra_params_every: 1
   param_definitions:
     - "r0032:dds_float"
     - "r0035:dds_float"
@@ -26,7 +32,7 @@ options:
     - "r0754:dds_float"
     - "r0027:dds_float"
 schema:
-  og_level: list(debug|info|warning|error)?
+  log_level: list(debug|info|warning|error)?
   host: str
   port: int
   mqtt_host: str
@@ -34,6 +40,12 @@ schema:
   mqtt_username: str
   mqtt_password: password
   mqtt_topic: str
+  mqtt_cmd_topic: str?
   poll_interval: float
+  connect_timeout: float
+  read_timeout: float
+  core_batch_size: int
+  extra_batch_size: int
+  extra_params_every: int
   param_definitions:
     - str

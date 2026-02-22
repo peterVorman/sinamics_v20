@@ -456,20 +456,47 @@ def _retry_sleep(attempt: int, base: float = 1.0, cap: float = 60.0) -> None:
     logger.warning("Retry attempt %d – sleeping %.1fs …", attempt, delay)
     time.sleep(delay)
 
+
+def _env_int(name: str, default: int, min_value: int = 0) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        logger.warning("Invalid integer for %s, using default %d", name, default)
+        value = default
+    return max(min_value, value)
+
+
+def _env_float(name: str, default: float, min_value: float = 0.0) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        logger.warning("Invalid float for %s, using default %.3f", name, default)
+        value = default
+    return max(min_value, value)
+
 def main():
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.INFO),
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
 
     host = os.getenv("SINAMICS_HOST", "192.168.1.1")
-    port = int(os.getenv("SINAMICS_PORT", "80"))
+    port = _env_int("SINAMICS_PORT", 80, min_value=1)
     mqtt_host = os.getenv("MQTT_HOST", "core-mosquitto")
-    mqtt_port = int(os.getenv("MQTT_PORT", "1883"))
+    mqtt_port = _env_int("MQTT_PORT", 1883, min_value=1)
     mqtt_username = os.getenv("MQTT_USERNAME", "")
     mqtt_password = os.getenv("MQTT_PASSWORD", "")
     mqtt_topic = os.getenv("MQTT_TOPIC", "sinamics_v20/pump_station/state")
-    poll_interval = float(os.getenv("POLL_INTERVAL", "5"))
-        # Determine command topic for write commands
-    cmd_topic_env = os.getenv("MQTT_CMD_TOPIC", "")
+    poll_interval = _env_float("POLL_INTERVAL", 5.0, min_value=0.1)
+    connect_timeout = _env_float("CONNECT_TIMEOUT", 5.0, min_value=0.5)
+    read_timeout = _env_float("READ_TIMEOUT", 15.0, min_value=0.5)
+    core_batch_size = _env_int("CORE_BATCH_SIZE", 7, min_value=0)
+    extra_batch_size = _env_int("EXTRA_BATCH_SIZE", 6, min_value=0)
+    extra_params_every = _env_int("EXTRA_PARAMS_EVERY", 1, min_value=1)
+
+    # Determine command topic for write commands
+    cmd_topic_env = os.getenv("MQTT_CMD_TOPIC", "").strip()
     if cmd_topic_env:
         cmd_topic = cmd_topic_env
     elif mqtt_topic.endswith("/state"):
@@ -477,50 +504,10 @@ def main():
     else:
         cmd_topic = f"{mqtt_topic}/cmd"
 
-    # Lock to ensure that only one thread interacts with the drive client at a time
-    client_lock = threading.Lock()
-
-    def on_mqtt_message(client_mqtt, userdata, msg):
-        """Handle incoming MQTT command messages for setting drive parameters."""
-        topic = msg.topic
-        try:
-            payload_str = msg.payload.decode().strip()
-        except Exception:
-            payload_str = str(msg.payload)
-        # Remove the cmd topic prefix and extract param and index
-        subtopic = topic[len(cmd_topic):].lstrip("/")
-        parts = subtopic.split("/")
-        param_name = parts[0] if parts else ""
-        # Try to parse index if provided
-        try:
-            index = int(parts[1]) if len(parts) > 1 else -1
-        except ValueError:
-            index = -1
-        # Parse the payload into int, float or leave as string
-        try:
-            if "." in payload_str:
-                value = float(payload_str)
-            else:
-                value = int(payload_str)
-        except ValueError:
-            value = payload_str
-        logger.info("MQTT command: writing %s index=%s value=%s", param_name, index, value)
-        # Acquire lock and write the parameter
-        with client_lock:
-            try:
-                result = client.write_param(param_name, value, index)
-                status_ok = bool(result and result.get("status", 0) >= 200)
-            except Exception:
-                logger.exception("Error processing MQTT write command")
-                status_ok = False
-        # Publish a simple result (ok/error) to a result topic
-        response_topic = f"{cmd_topic}/result/{param_name}"
-        result_msg = "ok" if status_ok else "error"
-        try:
-            client_mqtt.publish(response_topic, result_msg, qos=0, retain=False)
-        except Exception:
-            logger.warning("Failed to publish command result")
-
+    if cmd_topic.endswith("/cmd"):
+        cmd_result_topic = cmd_topic[:-4] + "/cmd_result"
+    else:
+        cmd_result_topic = f"{cmd_topic}_result"
 
     if mqtt_topic.endswith("/state"):
         availability_topic = mqtt_topic.replace("/state", "/availability")
@@ -529,83 +516,254 @@ def main():
 
     param_config = load_param_config_from_env()
     param_codes = list(param_config.keys())
-
     client = SinamicsV20Client(host, port, "/")
+
+    # Lock to ensure that only one thread interacts with the drive client at a time
+    client_lock = threading.Lock()
+
+    logger.info(
+        "Polling config: interval=%.1fs connect_timeout=%.1fs read_timeout=%.1fs core_batch_size=%s extra_batch_size=%s extra_params_every=%d",
+        poll_interval,
+        connect_timeout,
+        read_timeout,
+        core_batch_size or "all",
+        extra_batch_size or "all",
+        extra_params_every,
+    )
+    logger.info(
+        "MQTT topics: state=%s availability=%s cmd=%s cmd_result=%s",
+        mqtt_topic,
+        availability_topic,
+        cmd_topic,
+        cmd_result_topic,
+    )
+
+    def on_mqtt_message(client_mqtt, userdata, msg):
+        """Handle incoming MQTT command messages for setting drive parameters."""
+        del userdata
+        topic = msg.topic or ""
+        if not topic.startswith(cmd_topic):
+            return
+
+        try:
+            payload_str = msg.payload.decode().strip()
+        except Exception:
+            payload_str = str(msg.payload)
+
+        # Remove the cmd topic prefix and extract param and index
+        subtopic = topic[len(cmd_topic):].lstrip("/")
+        if not subtopic:
+            logger.debug("Ignoring MQTT command root topic message: %s", topic)
+            return
+
+        parts = subtopic.split("/")
+        if parts[0] in {"result", "cmd_result"}:
+            logger.debug("Ignoring reserved MQTT command subtopic: %s", topic)
+            return
+
+        param_name = parts[0].strip() if parts else ""
+        if not param_name:
+            logger.warning("Ignoring MQTT command without parameter name: %s", topic)
+            return
+
+        # Try to parse index if provided
+        try:
+            index = int(parts[1]) if len(parts) > 1 else -1
+        except ValueError:
+            logger.warning("Invalid parameter index in MQTT command topic: %s", topic)
+            index = -1
+
+        # Parse the payload into int, float or leave as string
+        try:
+            if "." in payload_str:
+                value = float(payload_str)
+            else:
+                value = int(payload_str)
+        except ValueError:
+            value = payload_str
+
+        logger.info("MQTT command: writing %s index=%s value=%s", param_name, index, value)
+
+        response_topic = (
+            f"{cmd_result_topic}/{param_name}/{index}"
+            if index != -1
+            else f"{cmd_result_topic}/{param_name}"
+        )
+        result_msg = "error"
+
+        with client_lock:
+            try:
+                if client.sock is None:
+                    logger.warning("Ignoring MQTT write command while drive is disconnected")
+                    result = None
+                else:
+                    result = client.write_param(param_name, value, index)
+                status = int(result.get("status", 0)) if result else 0
+                status_ok = 200 <= status < 300
+                result_msg = "ok" if status_ok else "error"
+            except Exception:
+                logger.exception("Error processing MQTT write command")
+                result_msg = "error"
+
+        try:
+            client_mqtt.publish(response_topic, result_msg, qos=0, retain=False)
+        except Exception:
+            logger.warning("Failed to publish command result")
 
     if hasattr(mqtt, "CallbackAPIVersion"):
         mqtt_client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
     else:
         mqtt_client = mqtt.Client()
-        
-    if mqtt_username: mqtt_client.username_pw_set(mqtt_username, mqtt_password)
+
+    if mqtt_username:
+        mqtt_client.username_pw_set(mqtt_username, mqtt_password)
     mqtt_client.will_set(availability_topic, "offline", retain=True)
 
+    availability_online = False
     try:
         mqtt_client.connect(mqtt_host, mqtt_port, 60)
         mqtt_client.loop_start()
         mqtt_client.publish(availability_topic, "online", retain=True)
+        availability_online = True
         publish_discovery_configs(mqtt_client, mqtt_topic, param_config, availability_topic)
-                # Subscribe to command topics and set handler for incoming writes
+        # Subscribe to command topics and set handler for incoming writes
         mqtt_client.on_message = on_mqtt_message
         mqtt_client.subscribe(f"{cmd_topic}/#")
     except Exception:
         logger.exception("Connection to MQTT failed.")
 
     consec_errors = 0
+    cycle_no = 0
+    extra_raw_cache = {}
 
     while True:
+        stage = "idle"
+        core_duration = 0.0
+        extra_duration = 0.0
+        extra_refreshed = False
         try:
-            if client.sock is None:
-                logger.info("WebSocket connecting …")
-                client.connect()
+            cycle_no += 1
+            stage = "connect"
+            with client_lock:
+                if client.sock is None:
+                    logger.info(
+                        "WebSocket connecting … (connect_timeout=%.1fs, read_timeout=%.1fs)",
+                        connect_timeout,
+                        read_timeout,
+                    )
+                    client.connect(timeout=connect_timeout, read_timeout=read_timeout)
 
-            base_state = client.read_station_state()
-            extra_raw = client.read_params_batch(param_codes) if param_codes else {}
+            stage = "read_core"
+            t_core = time.monotonic()
+            with client_lock:
+                base_state = client.read_station_state(
+                    batch_size=core_batch_size or None
+                )
+            core_duration = time.monotonic() - t_core
 
+            stage = "read_extra"
+            refresh_extra = bool(param_codes) and (
+                not extra_raw_cache
+                or extra_params_every <= 1
+                or (cycle_no % extra_params_every == 0)
+            )
+            if refresh_extra:
+                t_extra = time.monotonic()
+                with client_lock:
+                    extra_raw_cache = client.read_params_chunked(
+                        param_codes,
+                        batch_size=extra_batch_size or None,
+                    )
+                extra_duration = time.monotonic() - t_extra
+                extra_refreshed = True
+            extra_raw = dict(extra_raw_cache)
+
+            stage = "parse_extra"
             extra_parsed = {}
-            for code, meta in extra_raw.items():
+            for code in param_codes:
+                meta = extra_raw.get(code, {})
                 raw_val = meta.get("value_raw")
                 parser_name = param_config.get(code, "raw")
                 parser_fn = PARSER_REGISTRY.get(parser_name)
-                parsed = parser_fn(raw_val) if parser_fn else raw_val
+                try:
+                    parsed = parser_fn(raw_val) if (parser_fn and raw_val is not None) else raw_val
+                except Exception as exc:
+                    logger.warning(
+                        "Extra param parse error for %s (parser=%s raw=%r): %s",
+                        code,
+                        parser_name,
+                        raw_val,
+                        exc,
+                    )
+                    parsed = {"raw": raw_val, "parse_error": str(exc)}
                 extra_parsed[code] = {"raw": raw_val, "parsed": parsed}
 
             base_state["params"] = extra_parsed
+            base_state.setdefault("meta", {})
+            base_state["meta"].update(
+                {
+                    "poll_cycle": cycle_no,
+                    "extra_params_refreshed": extra_refreshed,
+                }
+            )
+
+            stage = "publish"
             payload = json.dumps(base_state, default=str)
-            
             if mqtt_client.is_connected():
+                if not availability_online:
+                    mqtt_client.publish(availability_topic, "online", retain=True)
+                    availability_online = True
                 mqtt_client.publish(mqtt_topic, payload, qos=0, retain=False)
+
+            logger.debug(
+                "Polling cycle %d complete: core=%.2fs extra=%.2fs refreshed_extra=%s",
+                cycle_no,
+                core_duration,
+                extra_duration,
+                extra_refreshed,
+            )
             consec_errors = 0
             time.sleep(poll_interval)
 
         except (TimeoutError, OSError, RuntimeError, socket.error) as exc:
             consec_errors += 1
-            logger.error("Polling error (%d/%d): %s", consec_errors, MAX_RETRIES, exc)
-            client.close()
-                        # Publish unavailable state to MQTT topic
+            logger.error(
+                "Polling error (%d/%d) during %s: %s",
+                consec_errors,
+                MAX_RETRIES,
+                stage,
+                exc,
+            )
+            with client_lock:
+                client.close()
             try:
-                if mqtt_client.is_connected():
-                    mqtt_client.publish(mqtt_topic, "unavailable", qos=0, retain=False)
+                if mqtt_client.is_connected() and availability_online:
+                    mqtt_client.publish(availability_topic, "offline", retain=True)
+                    availability_online = False
             except Exception:
-                logger.warning("Failed to publish unavailable state")
+                logger.warning("Failed to publish offline availability state")
             if consec_errors >= MAX_RETRIES:
-                try: mqtt_client.publish(availability_topic, "offline", retain=True)
-                except: pass
+                try:
+                    if mqtt_client.is_connected():
+                        mqtt_client.publish(availability_topic, "offline", retain=True)
+                except Exception:
+                    pass
                 raise
             _retry_sleep(consec_errors, base=BASE_BACKOFF)
         except Exception:
             consec_errors += 1
-            logger.exception("Unhandled error")
-            client.close()
-                        # Publish unavailable state to MQTT topic
+            logger.exception("Unhandled error during %s", stage)
+            with client_lock:
+                client.close()
             try:
-                if mqtt_client.is_connected():
-                    mqtt_client.publish(mqtt_topic, "unavailable", qos=0, retain=False)
+                if mqtt_client.is_connected() and availability_online:
+                    mqtt_client.publish(availability_topic, "offline", retain=True)
+                    availability_online = False
             except Exception:
-                logger.warning("Failed to publish unavailable state")
-            if consec_errors >= MAX_RETRIES: raise
+                logger.warning("Failed to publish offline availability state")
+            if consec_errors >= MAX_RETRIES:
+                raise
             _retry_sleep(consec_errors, base=BASE_BACKOFF)
 
 if __name__ == "__main__":
     main()
-
