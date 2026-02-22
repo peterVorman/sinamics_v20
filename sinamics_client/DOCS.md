@@ -1,136 +1,185 @@
-# Home Assistant Community Add-on: Example
+# Home Assistant Add-on: Sinamics V20 Pump Station
 
-This is an example add-on for Home Assistant. When started, it displays a
-random quote every 5 seconds.
+Read Siemens Sinamics V20 Smart Access values over WebSocket and publish them to
+MQTT for Home Assistant.
 
-It shows off several features and structures like:
+The add-on publishes:
 
-- Full blown GitHub repository.
-- General Dockerfile structure and setup.
-- The use of the `config.yaml` and `build.yaml` files.
-- General shell scripting structure (`run.sh`).
-- Quality assurance using CodeClimate.
-- Continuous integration and deployment using GitLab.
-- Usage of the Community Home Assistant Add-ons build environment.
-- Small use of the Bash function library in our base images.
-- The use of Docker label schema.
+- A JSON state payload to an MQTT state topic.
+- Home Assistant MQTT discovery entities.
+- Availability status (`online` / `offline`).
+- Optional MQTT command topics for writing parameters back to the drive.
 
 ## Installation
 
-The installation of this add-on is pretty straightforward and not different in
-comparison to installing any other Home Assistant add-on.
-
-1. Click the Home Assistant My button below to open the add-on on your Home
-   Assistant instance.
-
-   [![Open this add-on in your Home Assistant instance.][addon-badge]][addon]
-
-1. Click the "Install" button to install the add-on.
-1. Start the "Example" add-on.
-1. Check the logs of the "Example" add-on to see it in action.
+1. Add this repository to Home Assistant.
+1. Install `Sinamics V20 Pump Station`.
+1. Configure the Sinamics Smart Access IP address and MQTT settings.
+1. Start the add-on.
+1. Check the add-on logs for connection and polling status.
 
 ## Configuration
 
-Eventought this add-on is just an example add-on, it does come with some
-configuration options to play around with.
-
-**Note**: _Remember to restart the add-on when the configuration is changed._
-
-Example add-on configuration:
+Example configuration:
 
 ```yaml
 log_level: info
-seconds_between_quotes: 5
+host: 192.168.1.1
+port: 80
+mqtt_host: core-mosquitto
+mqtt_port: 1883
+mqtt_username: mqtt_user
+mqtt_password: mqtt_pass
+mqtt_topic: sinamics_v20/pump_station/state
+poll_interval: 10
+connect_timeout: 5
+read_timeout: 15
+core_batch_size: 7
+extra_batch_size: 6
+extra_params_every: 1
+param_definitions:
+  - r0032:dds_float
+  - r0035:dds_float
+  - r0037:dds_float
+  - r0039:dds_float
+  - r0754:dds_float
+  - r0027:dds_float
 ```
 
-### Option: `log_level`
+## Options
 
-The `log_level` option controls the level of log output by the add-on and can
-be changed to be more or less verbose, which might be useful when you are
-dealing with an unknown issue. Possible values are:
+### `log_level`
 
-- `debug`: Shows detailed debug information.
-- `info`: Normal (usually) interesting events.
-- `warning`: Exceptional occurrences that are not errors.
-- `error`: Runtime errors that do not require immediate action.
+Logging level: `debug`, `info`, `warning`, or `error`.
 
-Please note that each level automatically includes log messages from a
-more severe level, e.g., `debug` also shows `info` messages. By default,
-the `log_level` is set to `info`, which is the recommended setting unless
-you are troubleshooting.
+### `host` / `port`
 
-### Option: `seconds_between_quotes`
+IP address and TCP port of the Sinamics V20 Smart Access module.
 
-Sets the number of seconds between the output of each quote. The value
-must be between `1` and `120` seconds. This value is set to `5` seconds by
-default.
+### `mqtt_host` / `mqtt_port` / `mqtt_username` / `mqtt_password`
 
-## Changelog & Releases
+MQTT broker connection settings.
 
-This repository keeps a change log using [GitHub's releases][releases]
-functionality.
+### `mqtt_topic`
 
-Releases are based on [Semantic Versioning][semver], and use the format
-of `MAJOR.MINOR.PATCH`. In a nutshell, the version will be incremented
-based on the following:
+Base MQTT state topic used for JSON payload publication.
 
-- `MAJOR`: Incompatible or major changes.
-- `MINOR`: Backwards-compatible new features and enhancements.
-- `PATCH`: Backwards-compatible bugfixes and package updates.
+Default:
 
-## Support
+```text
+sinamics_v20/pump_station/state
+```
 
-Got questions?
+The add-on also derives:
 
-You have several options to get them answered:
+- Availability topic: `.../availability`
+- Command topic: `.../cmd` (unless overridden)
+- Command result topic: `.../cmd_result`
 
-- The [Home Assistant Community Add-ons Discord chat server][discord] for add-on
-  support and feature requests.
-- The [Home Assistant Discord chat server][discord-ha] for general Home
-  Assistant discussions and questions.
-- The Home Assistant [Community Forum][forum].
-- Join the [Reddit subreddit][reddit] in [/r/homeassistant][reddit]
+### `mqtt_cmd_topic`
 
-You could also [open an issue here][issue] GitHub.
+Optional override for the command topic base. If empty, it is derived from
+`mqtt_topic`.
 
-## Authors & contributors
+### `poll_interval`
 
+Delay between polling cycles in seconds.
 
-For a full list of all authors and contributors,
-check [the contributor's page][contributors].
+### `connect_timeout`
 
-## License
+TCP/WebSocket connect timeout in seconds.
 
-MIT License
+### `read_timeout`
 
-Copyright (c) 2017-2025 Franck Nijhof
+Socket read timeout in seconds after the WebSocket session is established.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+### `core_batch_size`
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+How many core parameters are read per batch request. Lower values reduce load on
+the Smart Access module but increase total cycle time.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Set to `0` to read all core parameters in a single batch.
 
-[addon-badge]: https://my.home-assistant.io/badges/supervisor_addon.svg
-[addon]: https://my.home-assistant.io/redirect/supervisor_addon/?addon=a0d7b954_example&repository_url=https%3A%2F%2Fgithub.com%2Fhassio-addons%2Frepository
-[contributors]: https://github.com/hassio-addons/addon-example/graphs/contributors
-[discord-ha]: https://discord.gg/c5DvZ4e
-[discord]: https://discord.me/hassioaddons
-[forum]: https://community.home-assistant.io/t/repository-community-hass-io-add-ons/24705?u=frenck
-[frenck]: https://github.com/frenck
-[issue]: https://github.com/hassio-addons/addon-example/issues
-[reddit]: https://reddit.com/r/homeassistant
-[releases]: https://github.com/hassio-addons/addon-example/releases
-[semver]: http://semver.org/spec/v2.0.0.html
+### `extra_batch_size`
+
+How many user-defined `param_definitions` are read per batch request.
+
+Set to `0` to read all extra parameters in a single batch.
+
+### `extra_params_every`
+
+Read extra parameters every N polling cycles.
+
+Examples:
+
+- `1`: read extra parameters every cycle
+- `2`: read extra parameters every second cycle
+- `3`: read extra parameters every third cycle
+
+### `param_definitions`
+
+List of extra parameters to publish in `value_json.params`.
+
+Format:
+
+```text
+<parameter>:<parser>
+```
+
+Examples:
+
+- `r0032:dds_float`
+- `r0052:r0052_status`
+- `r4000:r4000_mpc`
+- `P2378:dds_float`
+- `r1234:int`
+- `r1234:raw`
+
+Supported parsers:
+
+- `dds_float`
+- `r0052_status`
+- `r4000_mpc`
+- `int`
+- `float`
+- `raw`
+
+## MQTT command writes (optional)
+
+The add-on listens on the command topic and writes drive parameters.
+
+Topic format:
+
+```text
+<cmd_topic>/<parameter>
+<cmd_topic>/<parameter>/<index>
+```
+
+Examples:
+
+```text
+sinamics_v20/pump_station/cmd/P0010
+sinamics_v20/pump_station/cmd/P1234/2
+```
+
+Command result topic format:
+
+```text
+<cmd_result_topic>/<parameter>
+<cmd_result_topic>/<parameter>/<index>
+```
+
+Payloads:
+
+- Write command payload: numeric or string value
+- Result payload: `ok` or `error`
+
+## Troubleshooting
+
+- Increase `read_timeout` if you see frequent `timed out` errors.
+- Increase `poll_interval` to reduce load on the Smart Access module.
+- Lower `core_batch_size` and `extra_batch_size` if the device struggles with
+  large batch requests.
+- Increase `extra_params_every` to poll custom parameters less often.
+- Make sure only one client is actively connected to the Smart Access web
+  interface if you suspect connection resets.
