@@ -31,6 +31,7 @@ mqtt_port: 1883
 mqtt_username: mqtt_user
 mqtt_password: mqtt_pass
 mqtt_topic: sinamics_v20/pump_station/state
+mqtt_cmd_topic: ""
 poll_interval: 10
 connect_timeout: 5
 read_timeout: 15
@@ -144,6 +145,34 @@ Supported parsers:
 - `float`
 - `raw`
 
+## Published payloads
+
+### State topic payload
+
+The add-on publishes a JSON document to `mqtt_topic` containing core sections
+such as:
+
+- `high_level`
+- `drive`
+- `multi_pump`
+- `frequency`
+- `voltage`
+- `pid`
+- `operating_hours`
+- `raw_params`
+- `params` (from `param_definitions`)
+- `meta`
+
+The `meta` section includes:
+
+- `poll_cycle`
+- `extra_params_refreshed`
+
+### Availability topic payload
+
+The add-on publishes `online` / `offline` to the availability topic and keeps
+the state topic JSON-only.
+
 ## MQTT command writes (optional)
 
 The add-on listens on the command topic and writes drive parameters.
@@ -183,3 +212,5 @@ Payloads:
 - Increase `extra_params_every` to poll custom parameters less often.
 - Make sure only one client is actively connected to the Smart Access web
   interface if you suspect connection resets.
+- Use the add-on logs to see which stage timed out (`connect`, `read_core`,
+  `read_extra`, `publish`).

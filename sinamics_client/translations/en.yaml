@@ -2,9 +2,63 @@
 configuration:
   log_level:
     name: Log level
-    description: The amount of logging the add-on should do.
-  seconds_between_quotes:
-    name: Seconds between quotes
+    description: Control how much detail the add-on writes to the log.
+  host:
+    name: Sinamics host
     description: >-
-      The number of seconds the add-on waits until showing a new quote in the
-      add-on log.
+      IP address or hostname of the Sinamics V20 Smart Access module.
+  port:
+    name: Sinamics port
+    description: >-
+      TCP port used by the Sinamics Smart Access WebSocket service.
+  mqtt_host:
+    name: MQTT host
+    description: >-
+      Hostname of the MQTT broker (for example core-mosquitto).
+  mqtt_port:
+    name: MQTT port
+    description: TCP port of the MQTT broker.
+  mqtt_username:
+    name: MQTT username
+    description: >-
+      Username for the MQTT broker (leave empty if not required).
+  mqtt_password:
+    name: MQTT password
+    description: Password for the MQTT broker.
+  mqtt_topic:
+    name: MQTT state topic
+    description: Base topic where the add-on publishes JSON state payloads.
+  mqtt_cmd_topic:
+    name: MQTT command topic
+    description: >-
+      Optional override for the command topic base used for parameter writes. If
+      empty, it is derived from the MQTT state topic.
+  poll_interval:
+    name: Poll interval
+    description: Delay in seconds between polling cycles.
+  connect_timeout:
+    name: Connect timeout
+    description: TCP/WebSocket connect timeout in seconds.
+  read_timeout:
+    name: Read timeout
+    description: >-
+      Socket read timeout in seconds after the WebSocket connection is
+      established.
+  core_batch_size:
+    name: Core batch size
+    description: >-
+      Number of built-in core parameters read per batch request. Set 0 to read
+      all core parameters in a single batch.
+  extra_batch_size:
+    name: Extra batch size
+    description: >-
+      Number of custom parameters (param_definitions) read per batch request.
+      Set 0 to read all in a single batch.
+  extra_params_every:
+    name: Extra params frequency
+    description: Read custom parameters every N polling cycles.
+  param_definitions:
+    name: Parameter definitions
+    description: >-
+      Additional parameters to publish in value_json.params using the format
+      <parameter>:<parser> (for example r0032:dds_float).

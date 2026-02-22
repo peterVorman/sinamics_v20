@@ -1,27 +1,17 @@
-# Home Assistant Community Add-on: Example
+# Home Assistant Add-on: Sinamics V20 Pump Station
 
 [![Release][release-shield]][release] ![Project Stage][project-stage-shield] ![Project Maintenance][maintenance-shield]
 
-[![Discord][discord-shield]][discord] [![Community Forum][forum-shield]][forum]
+Read Siemens Sinamics V20 Smart Access values over WebSocket and publish them to
+MQTT for Home Assistant.
 
-Example add-on by Community Home Assistant add-ons.
+Features:
 
-## About
-
-This is an example add-on for Home Assistant. When started, it displays a
-random quote every 5 seconds.
-
-It shows off several features and structures like:
-
-- Full blown GitHub repository.
-- General Dockerfile structure and setup.
-- The use of the `config.yaml` and `build.yaml` files.
-- General shell scripting structure (`run.sh`).
-- Quality assurance using CodeClimate.
-- Continuous integration and deployment using GitLab.
-- Usage of the Community Home Assistant Add-ons build environment.
-- Small use of the Bash function library in our base images.
-- The use of Docker label schema.
+- MQTT JSON state publishing
+- Home Assistant MQTT discovery
+- Availability topic (`online` / `offline`)
+- Optional MQTT write command topics
+- Configurable timeouts and chunked polling
 
 {% if channel == "edge" %}
 ## WARNING! THIS IS AN EDGE VERSION!
