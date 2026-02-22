@@ -367,6 +367,7 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config, availabilit
     # --- DYNAMIC PARAMETERS ---
     for code in param_config.keys():
         hints = SENSOR_HINTS.get(code, {})
+        is_bitmask_sensor = "bitmask" in hints
         
         # 1. Main Sensor (Integer/Value)
         uid = f"sinamics_param_{code}"
@@ -374,7 +375,11 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config, availabilit
             "name": hints.get("name", f"Sinamics {code}"),
             "unique_id": uid,
             "state_topic": mqtt_topic,
-            "value_template": f"{{{{ value_json.params.{code}.parsed }}}}",
+            "value_template": (
+                f"{{{{ value_json.params.{code}.human }}}}"
+                if is_bitmask_sensor
+                else f"{{{{ value_json.params.{code}.parsed }}}}"
+            ),
             "device": base_device,
             "availability_topic": availability_topic,
             "icon": hints.get("icon", "mdi:code-braces"),
@@ -413,6 +418,38 @@ def publish_discovery_configs(mqtt_client, mqtt_topic, param_config, availabilit
                 mqtt_client.publish(bit_topic, json.dumps(bit_payload), retain=True)
                 
     logger.info("Published discovery configs")
+
+
+def _humanize_bitmask_status(raw_value, bitmask_def: dict) -> dict:
+    """Return human-readable metadata for a bitmask status word."""
+    info = {
+        "human": None,
+        "active_bits": [],
+        "active_labels": [],
+        "raw_int": None,
+    }
+    if raw_value is None:
+        return info
+
+    raw_int = int(raw_value)
+    active_bits = []
+    active_labels = []
+    for bit, label in sorted(bitmask_def.items(), key=lambda item: int(item[0])):
+        bit_num = int(bit)
+        if raw_int & (1 << bit_num):
+            active_bits.append(bit_num)
+            active_labels.append(label)
+
+    human = ", ".join(active_labels) if active_labels else "None"
+    # Keep sensor state reasonably short; expose full labels list separately.
+    if len(human) > 240:
+        human = human[:237] + "..."
+
+    info["human"] = human
+    info["active_bits"] = active_bits
+    info["active_labels"] = active_labels
+    info["raw_int"] = raw_int
+    return info
 
 
 def _normalize_param_items(items) -> dict:
@@ -683,6 +720,7 @@ def main():
             for code in param_codes:
                 meta = extra_raw.get(code, {})
                 raw_val = meta.get("value_raw")
+                hints = SENSOR_HINTS.get(code, {})
                 parser_name = param_config.get(code, "raw")
                 parser_fn = PARSER_REGISTRY.get(parser_name)
                 try:
@@ -696,7 +734,21 @@ def main():
                         exc,
                     )
                     parsed = {"raw": raw_val, "parse_error": str(exc)}
-                extra_parsed[code] = {"raw": raw_val, "parsed": parsed}
+                item_payload = {"raw": raw_val, "parsed": parsed}
+                bitmask_def = hints.get("bitmask")
+                if bitmask_def:
+                    try:
+                        item_payload.update(_humanize_bitmask_status(raw_val, bitmask_def))
+                    except Exception as exc:
+                        logger.warning(
+                            "Bitmask humanization error for %s (raw=%r): %s",
+                            code,
+                            raw_val,
+                            exc,
+                        )
+                        item_payload["human"] = str(raw_val) if raw_val is not None else None
+                        item_payload["bitmask_parse_error"] = str(exc)
+                extra_parsed[code] = item_payload
 
             base_state["params"] = extra_parsed
             base_state.setdefault("meta", {})
