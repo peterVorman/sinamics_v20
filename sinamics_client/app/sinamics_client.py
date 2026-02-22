@@ -49,81 +49,127 @@ class SinamicsV20Client:
     # Low-level WebSocket
     # -------------------------------------------------------------------------
 
-    def connect(self, timeout: float = 5.0, read_timeout: Optional[float] = None):
+    def connect(
+        self,
+        timeout: float = 5.0,
+        read_timeout: Optional[float] = None,
+        handshake_retries: int = 2,
+        handshake_retry_delay: float = 0.5,
+    ):
         """Open TCP + WebSocket handshake (without verifying Sec-WebSocket-Accept).
 
         Args:
             timeout: Socket connection timeout in seconds.
         """
-        key_bytes = os.urandom(16)
-        key = base64.b64encode(key_bytes).decode("ascii")
-        expected_accept = base64.b64encode(
-            hashlib.sha1((key + WS_GUID).encode("ascii")).digest()
-        ).decode("ascii")
-        origin = f"http://{self.host}"
+        last_exc: Optional[Exception] = None
+        attempts = max(1, int(handshake_retries))
 
-        request_lines = [
-            f"GET {self.path} HTTP/1.1",
-            f"Host: {self.host}:{self.port}",
-            "Upgrade: websocket",
-            "Connection: Upgrade",
-            f"Sec-WebSocket-Key: {key}",
-            "Sec-WebSocket-Version: 13",
-            f"Origin: {origin}",
-            "",
-            "",
-        ]
-        request = "\r\n".join(request_lines).encode("ascii")
+        for attempt in range(1, attempts + 1):
+            key_bytes = os.urandom(16)
+            key = base64.b64encode(key_bytes).decode("ascii")
+            expected_accept = base64.b64encode(
+                hashlib.sha1((key + WS_GUID).encode("ascii")).digest()
+            ).decode("ascii")
+            origin = f"http://{self.host}"
 
-        self.close()
-        self.sock = socket.create_connection((self.host, self.port), timeout=timeout)
-        self.sock.settimeout(timeout)
-        self.sock.sendall(request)
-        self._recv_buffer.clear()
+            request_lines = [
+                f"GET {self.path} HTTP/1.1",
+                f"Host: {self.host}:{self.port}",
+                "Upgrade: websocket",
+                "Connection: Upgrade",
+                f"Sec-WebSocket-Key: {key}",
+                "Sec-WebSocket-Version: 13",
+                f"Origin: {origin}",
+                "",
+                "",
+            ]
+            request = "\r\n".join(request_lines).encode("ascii")
 
-        # Read HTTP headers until \r\n\r\n
-        response = b""
-        while b"\r\n\r\n" not in response:
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise RuntimeError("Connection closed during handshake")
-            response += chunk
-            if len(response) > 65536:
-                raise RuntimeError("Handshake header too large")
+            try:
+                self.close()
+                self.sock = socket.create_connection((self.host, self.port), timeout=timeout)
+                self.sock.settimeout(timeout)
+                self.sock.sendall(request)
+                self._recv_buffer.clear()
 
-        try:
-            header_bytes, remainder = response.split(b"\r\n\r\n", 1)
-            header = header_bytes.decode("ascii", errors="replace")
-        except Exception:
-            header = "<failed to decode header>"
-            remainder = b""
-        logger.debug("Handshake response header:\n%s", header)
+                # Read HTTP headers until \r\n\r\n
+                response = b""
+                while b"\r\n\r\n" not in response:
+                    chunk = self.sock.recv(4096)
+                    if not chunk:
+                        raise RuntimeError("Connection closed during handshake")
+                    response += chunk
+                    if len(response) > 65536:
+                        raise RuntimeError("Handshake header too large")
 
-        status_line = ""
-        headers = {}
-        if header != "<failed to decode header>":
-            lines = header.split("\r\n")
-            if lines:
-                status_line = lines[0]
-            for line in lines[1:]:
-                if ":" not in line:
-                    continue
-                key_name, value = line.split(":", 1)
-                headers[key_name.strip().lower()] = value.strip()
+                try:
+                    header_bytes, remainder = response.split(b"\r\n\r\n", 1)
+                    header = header_bytes.decode("ascii", errors="replace")
+                except Exception:
+                    header = "<failed to decode header>"
+                    remainder = b""
+                logger.debug("Handshake response header:\n%s", header)
 
-        if " 101 " not in f" {status_line} " and not status_line.endswith(" 101"):
-            raise RuntimeError(f"Invalid WebSocket handshake status: {status_line or '<missing>'}")
-        if headers.get("upgrade", "").lower() != "websocket":
-            raise RuntimeError(f"Invalid WebSocket Upgrade header: {headers.get('upgrade')!r}")
-        if "upgrade" not in headers.get("connection", "").lower():
-            raise RuntimeError(f"Invalid WebSocket Connection header: {headers.get('connection')!r}")
-        if headers.get("sec-websocket-accept") != expected_accept:
-            raise RuntimeError("Invalid Sec-WebSocket-Accept in handshake response")
+                status_line = ""
+                headers = {}
+                if header != "<failed to decode header>":
+                    lines = header.split("\r\n")
+                    if lines:
+                        status_line = lines[0]
+                    for line in lines[1:]:
+                        if ":" not in line:
+                            continue
+                        key_name, value = line.split(":", 1)
+                        headers[key_name.strip().lower()] = value.strip()
 
-        self._recv_buffer.extend(remainder)
-        effective_read_timeout = timeout if read_timeout is None else read_timeout
-        self.sock.settimeout(effective_read_timeout)
-        logger.info("WebSocket connected (Sinamics V20 Smart Access)")
+                if " 101 " not in f" {status_line} " and not status_line.endswith(" 101"):
+                    raise RuntimeError(
+                        f"Invalid WebSocket handshake status: {status_line or '<missing>'}"
+                    )
+                if headers.get("upgrade", "").lower() != "websocket":
+                    raise RuntimeError(
+                        f"Invalid WebSocket Upgrade header: {headers.get('upgrade')!r}"
+                    )
+                if "upgrade" not in headers.get("connection", "").lower():
+                    raise RuntimeError(
+                        f"Invalid WebSocket Connection header: {headers.get('connection')!r}"
+                    )
+                accept_header = headers.get("sec-websocket-accept", "").strip()
+                if accept_header != expected_accept:
+                    logger.debug(
+                        "Handshake accept mismatch (attempt %d/%d): expected=%r got=%r",
+                        attempt,
+                        attempts,
+                        expected_accept,
+                        accept_header,
+                    )
+                    raise RuntimeError("Invalid Sec-WebSocket-Accept in handshake response")
+
+                self._recv_buffer.extend(remainder)
+                effective_read_timeout = timeout if read_timeout is None else read_timeout
+                self.sock.settimeout(effective_read_timeout)
+                logger.info("WebSocket connected (Sinamics V20 Smart Access)")
+                return
+
+            except Exception as exc:
+                last_exc = exc
+                self.close()
+                is_retryable = isinstance(exc, (TimeoutError, OSError, socket.error)) or (
+                    isinstance(exc, RuntimeError) and "handshake" in str(exc).lower()
+                )
+                if attempt >= attempts or not is_retryable:
+                    raise
+                logger.warning(
+                    "WebSocket connect attempt %d/%d failed (%s); retrying in %.1fs",
+                    attempt,
+                    attempts,
+                    exc,
+                    handshake_retry_delay,
+                )
+                time.sleep(max(0.0, handshake_retry_delay))
+
+        if last_exc:
+            raise last_exc
 
     def close(self):
         """Close underlying socket."""

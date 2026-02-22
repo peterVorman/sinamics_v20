@@ -678,6 +678,7 @@ def main():
         core_duration = 0.0
         extra_duration = 0.0
         extra_refreshed = False
+        extra_error = None
         try:
             cycle_no += 1
             stage = "connect"
@@ -706,13 +707,23 @@ def main():
             )
             if refresh_extra:
                 t_extra = time.monotonic()
-                with client_lock:
-                    extra_raw_cache = client.read_params_chunked(
-                        param_codes,
-                        batch_size=extra_batch_size or None,
+                try:
+                    with client_lock:
+                        extra_raw_cache = client.read_params_chunked(
+                            param_codes,
+                            batch_size=extra_batch_size or None,
+                        )
+                    extra_refreshed = True
+                except (TimeoutError, OSError, RuntimeError, socket.error) as exc:
+                    # Extra telemetry is optional; keep publishing core state and reuse cache.
+                    extra_error = str(exc)
+                    logger.warning(
+                        "Extra param refresh failed; reusing cached values this cycle: %s",
+                        exc,
                     )
+                    with client_lock:
+                        client.close()
                 extra_duration = time.monotonic() - t_extra
-                extra_refreshed = True
             extra_raw = dict(extra_raw_cache)
 
             stage = "parse_extra"
@@ -758,6 +769,8 @@ def main():
                     "extra_params_refreshed": extra_refreshed,
                 }
             )
+            if extra_error:
+                base_state["meta"]["extra_params_error"] = extra_error
 
             stage = "publish"
             payload = json.dumps(base_state, default=str)
