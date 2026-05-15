@@ -4,10 +4,10 @@ FROM ${BUILD_FROM}
 
 # Setup base
 RUN apk add --no-cache \
-    coreutils=9.7-r1 \
-    wget=1.25.0-r1 \
-    python3=3.12.12-r0 \
-    py3-pip=25.1.1-r0
+    coreutils=9.8-r1 \
+    wget=1.25.0-r2 \
+    python3=3.12.13-r0 \
+    py3-pip=25.1.1-r1
 
 # Build arguments
 ARG BUILD_ARCH
